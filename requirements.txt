@@ -1,0 +1,7 @@
+PyQt5==5.15.9
+PyQt5-Qt5==5.15.2
+PyQt5-sip==12.12.1
+tk==0.1.0
+capstone==4.0.2
+networkx==3.1
+numpy==1.24.3
