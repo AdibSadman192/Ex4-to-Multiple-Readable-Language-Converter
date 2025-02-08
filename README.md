@@ -173,3 +173,6 @@ python ex4_debug_decompiler.py
    - Multiple EX4 file testing
    - Cross-language verification
    - Pattern recognition validation
+
+
+<div align='center'><a href='https://www.websitecounterfree.com'><img src='https://www.websitecounterfree.com/c.php?d=9&id=65509&s=1' border='0' alt='Free Website Counter'></a></div>
