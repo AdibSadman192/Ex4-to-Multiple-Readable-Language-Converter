@@ -869,79 +869,181 @@ class MT4Analyzer:
         return "\n".join(code_lines)
 
     def generate_python_code(self, analysis):
-        """Generate Python equivalent code"""
+        """Generate enhanced Python equivalent code"""
         code_lines = []
         
-        # Add header
+        # Add header with more metadata
         code_lines.append('"""')
         code_lines.append(f"Converted from MT4/MT5 {analysis['metadata']['type']}")
         code_lines.append(f"Version: {analysis['metadata']['version']}")
+        if analysis['metadata'].get('creation_date', 'Unknown') != 'Unknown':
+            code_lines.append(f"Created: {analysis['metadata']['creation_date']}")
+        if analysis['metadata'].get('copyright', 'Unknown') != 'Unknown':
+            code_lines.append(f"Copyright: {analysis['metadata']['copyright']}")
+        
+        # Add strategy info
+        strategy = analysis.get('trading_strategy', {})
+        if strategy.get('type', 'Unknown') != 'Unknown':
+            code_lines.append(f"\nTrading Strategy: {strategy['type']}")
+        if strategy.get('indicators_used'):
+            code_lines.append(f"Indicators: {', '.join(strategy['indicators_used'])}")
+        
         code_lines.append('"""')
         code_lines.append("")
         
-        # Imports
+        # Imports - enhanced
         code_lines.append("import numpy as np")
         code_lines.append("import pandas as pd")
         code_lines.append("from datetime import datetime")
+        code_lines.append("from typing import Dict, List, Optional")
         code_lines.append("")
         
         # Class definition
-        class_name = os.path.splitext(os.path.basename(analysis.get('filepath', 'Unknown')))[0]
-        code_lines.append(f"class {class_name}:")
+        class_name = 'TradingIndicator' if analysis['metadata']['type'] == 'Indicator' else 'TradingExpert'
+        if analysis.get('filepath'):
+            class_name = os.path.splitext(os.path.basename(analysis['filepath']))[0]
         
-        # Constructor
-        code_lines.append("    def __init__(self):")
-        code_lines.append("        self.data = pd.DataFrame()")
-        code_lines.append("        self.indicators = {}")
+        code_lines.append(f"class {class_name}:")
+        code_lines.append(f'    """')
+        code_lines.append(f'    {analysis["metadata"]["type"]} implementation in Python')
+        code_lines.append(f'    """')
         code_lines.append("")
         
-        # Input parameters
-        params_found = False
-        for string in analysis['strings']:
-            if 'period' in string.lower() or 'shift' in string.lower() or 'price' in string.lower():
-                if not params_found:
-                    code_lines.append("        # Input Parameters")
-                    params_found = True
-                code_lines.append(f"        self.{string} = 0")
+        # Constructor with parameters
+        code_lines.append("    def __init__(self,")
+        
+        # Add input parameters
+        input_params = analysis.get('input_parameters', [])
+        if input_params:
+            for i, param in enumerate(input_params):
+                param_type = 'float' if param['type'] == 'double' else 'int'
+                comma = ',' if i < len(input_params) - 1 else ''
+                code_lines.append(f"                 {param['name'].lower()}: {param_type} = {param['default']}{comma}")
+        else:
+            code_lines[-1] = "    def __init__(self):"
+        
+        if input_params:
+            code_lines.append("                 ):")
+        
+        code_lines.append("        # Initialize data storage")
+        code_lines.append("        self.data: pd.DataFrame = pd.DataFrame()")
+        code_lines.append("        self.indicators: Dict[str, pd.Series] = {}")
+        code_lines.append("        ")
+        code_lines.append("        # Store parameters")
+        
+        if input_params:
+            for param in input_params:
+                code_lines.append(f"        self.{param['name'].lower()} = {param['name'].lower()}")
+        else:
+            code_lines.append("        # No parameters detected")
         
         code_lines.append("")
         
         # Initialize method
-        code_lines.append("    def initialize(self, data):")
+        code_lines.append("    def initialize(self, data: pd.DataFrame) -> bool:")
+        code_lines.append('        """Initialize with historical price data"""')
+        code_lines.append("        if data.empty:")
+        code_lines.append("            return False")
+        code_lines.append("        ")
         code_lines.append("        self.data = data")
+        code_lines.append("        self.calculate_indicators()")
         code_lines.append("        return True")
         code_lines.append("")
         
-        # Calculate indicators
-        code_lines.append("    def calculate_indicators(self):")
+        # Calculate indicators - enhanced
+        code_lines.append("    def calculate_indicators(self) -> None:")
+        code_lines.append('        """Calculate all technical indicators"""')
         
-        # Add detected patterns
-        for pattern in analysis['patterns']:
-            if 'Moving Average' in pattern['type']:
-                code_lines.append("        # Calculate Moving Average")
-                code_lines.append("        self.indicators['ma'] = self.data['close'].rolling(window=14).mean()")
-            elif 'RSI' in pattern['type']:
-                code_lines.append("        # Calculate RSI")
-                code_lines.append("        delta = self.data['close'].diff()")
-                code_lines.append("        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()")
-                code_lines.append("        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()")
-                code_lines.append("        rs = gain / loss")
-                code_lines.append("        self.indicators['rsi'] = 100 - (100 / (1 + rs))")
+        indicators_used = analysis.get('trading_strategy', {}).get('indicators_used', [])
+        if 'Moving Average' in indicators_used:
+            code_lines.append("        # Moving Average (detected)")
+            code_lines.append("        if 'close' in self.data.columns:")
+            code_lines.append("            period = getattr(self, 'period', 14)")
+            code_lines.append("            self.indicators['ma'] = self.data['close'].rolling(window=period).mean()")
+            code_lines.append("")
         
-        code_lines.append("        return True")
+        if 'RSI' in indicators_used:
+            code_lines.append("        # Relative Strength Index (detected)")
+            code_lines.append("        if 'close' in self.data.columns:")
+            code_lines.append("            period = getattr(self, 'period', 14)")
+            code_lines.append("            delta = self.data['close'].diff()")
+            code_lines.append("            gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()")
+            code_lines.append("            loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()")
+            code_lines.append("            rs = gain / loss")
+            code_lines.append("            self.indicators['rsi'] = 100 - (100 / (1 + rs))")
+            code_lines.append("")
+        
+        if 'MACD' in indicators_used:
+            code_lines.append("        # MACD (detected)")
+            code_lines.append("        if 'close' in self.data.columns:")
+            code_lines.append("            exp1 = self.data['close'].ewm(span=12, adjust=False).mean()")
+            code_lines.append("            exp2 = self.data['close'].ewm(span=26, adjust=False).mean()")
+            code_lines.append("            self.indicators['macd'] = exp1 - exp2")
+            code_lines.append("            self.indicators['macd_signal'] = self.indicators['macd'].ewm(span=9, adjust=False).mean()")
+            code_lines.append("")
+        
+        if 'ATR' in indicators_used:
+            code_lines.append("        # Average True Range (detected)")
+            code_lines.append("        if all(col in self.data.columns for col in ['high', 'low', 'close']):")
+            code_lines.append("            high_low = self.data['high'] - self.data['low']")
+            code_lines.append("            high_close = np.abs(self.data['high'] - self.data['close'].shift())")
+            code_lines.append("            low_close = np.abs(self.data['low'] - self.data['close'].shift())")
+            code_lines.append("            true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)")
+            code_lines.append("            period = getattr(self, 'period', 14)")
+            code_lines.append("            self.indicators['atr'] = true_range.rolling(window=period).mean()")
+            code_lines.append("")
+        
+        if 'Bollinger Bands' in indicators_used:
+            code_lines.append("        # Bollinger Bands (detected)")
+            code_lines.append("        if 'close' in self.data.columns:")
+            code_lines.append("            period = getattr(self, 'period', 20)")
+            code_lines.append("            sma = self.data['close'].rolling(window=period).mean()")
+            code_lines.append("            std = self.data['close'].rolling(window=period).std()")
+            code_lines.append("            self.indicators['bb_upper'] = sma + (std * 2)")
+            code_lines.append("            self.indicators['bb_middle'] = sma")
+            code_lines.append("            self.indicators['bb_lower'] = sma - (std * 2)")
+            code_lines.append("")
+        
+        if not indicators_used:
+            code_lines.append("        # No specific indicators detected")
+            code_lines.append("        pass")
+        
         code_lines.append("")
         
         # Main processing method
-        code_lines.append("    def process_tick(self):")
-        code_lines.append("        self.calculate_indicators()")
-        
         if analysis['metadata']['type'] == 'Expert Advisor':
-            code_lines.append("        # Trading logic")
-            code_lines.append("        if len(self.data) > 0:")
-            code_lines.append("            last_close = self.data['close'].iloc[-1]")
-            code_lines.append("            # Add your trading conditions here")
+            code_lines.append("    def on_tick(self) -> Optional[Dict]:")
+            code_lines.append('        """Process each new price tick"""')
+            code_lines.append("        if self.data.empty:")
+            code_lines.append("            return None")
+            code_lines.append("        ")
+            code_lines.append("        # Update indicators")
+            code_lines.append("        self.calculate_indicators()")
+            code_lines.append("        ")
+            code_lines.append("        # Trading logic (customize based on your strategy)")
+            code_lines.append("        signal = {")
+            code_lines.append("            'action': None,  # 'buy', 'sell', or None")
+            code_lines.append("            'price': self.data['close'].iloc[-1],")
+            code_lines.append("            'timestamp': datetime.now()")
+            code_lines.append("        }")
+            code_lines.append("        ")
+            code_lines.append("        # Example: Simple MA crossover logic")
+            code_lines.append("        if 'ma' in self.indicators and len(self.indicators['ma']) > 1:")
+            code_lines.append("            # Add your trading logic here")
+            code_lines.append("            pass")
+            code_lines.append("        ")
+            code_lines.append("        return signal")
+        else:
+            code_lines.append("    def calculate(self) -> pd.DataFrame:")
+            code_lines.append('        """Calculate indicator values"""')
+            code_lines.append("        self.calculate_indicators()")
+            code_lines.append("        return pd.DataFrame(self.indicators)")
         
-        code_lines.append("        return True")
+        code_lines.append("")
+        code_lines.append("    def get_latest_values(self) -> Dict:")
+        code_lines.append('        """Get the latest indicator values"""')
+        code_lines.append("        return {name: values.iloc[-1] if not values.empty else None")
+        code_lines.append("                for name, values in self.indicators.items()}")
         
         return "\n".join(code_lines)
 
@@ -1069,51 +1171,182 @@ class MT4Analyzer:
         return "\n".join(code_lines)
 
     def generate_text_description(self, analysis):
-        """Generate plain text description of the trading logic"""
+        """Generate comprehensive plain text description of the trading logic"""
         text_lines = []
         
-        # Header
-        text_lines.append("=== Trading Strategy Description ===")
-        text_lines.append(f"Type: {analysis['metadata']['type']}")
-        text_lines.append(f"Version: {analysis['metadata']['version']}")
+        # Header with file information
+        text_lines.append("=" * 70)
+        text_lines.append("EX4 FILE ANALYSIS REPORT".center(70))
+        text_lines.append("=" * 70)
         text_lines.append("")
         
-        # Parameters
-        params_found = False
-        for string in analysis['strings']:
-            if 'period' in string.lower() or 'shift' in string.lower() or 'price' in string.lower():
-                if not params_found:
-                    text_lines.append("Input Parameters:")
-                    params_found = True
-                text_lines.append(f"- {string}")
+        # Metadata section
+        text_lines.append("FILE INFORMATION")
+        text_lines.append("-" * 70)
+        text_lines.append(f"Type:           {analysis['metadata']['type']}")
+        text_lines.append(f"Version:        {analysis['metadata']['version']}")
+        if analysis['metadata'].get('creation_date', 'Unknown') != 'Unknown':
+            text_lines.append(f"Created:        {analysis['metadata']['creation_date']}")
+        if analysis['metadata'].get('copyright', 'Unknown') != 'Unknown':
+            text_lines.append(f"Copyright:      {analysis['metadata']['copyright']}")
+        if analysis['metadata'].get('author', 'Unknown') != 'Unknown':
+            text_lines.append(f"Author:         {analysis['metadata']['author']}")
         
-        if params_found:
+        # File statistics
+        stats = analysis.get('statistics', {})
+        if stats:
+            text_lines.append(f"File Size:      {stats.get('file_size_kb', 0)} KB ({stats.get('file_size_bytes', 0)} bytes)")
+            text_lines.append(f"Entropy:        {stats.get('entropy', 0)} (complexity measure)")
+        
+        text_lines.append("")
+        
+        # Strategy information
+        strategy = analysis.get('trading_strategy', {})
+        if strategy and strategy.get('type', 'Unknown') != 'Unknown':
+            text_lines.append("TRADING STRATEGY")
+            text_lines.append("-" * 70)
+            text_lines.append(f"Strategy Type:  {strategy['type']}")
+            
+            if strategy.get('timeframes'):
+                text_lines.append(f"Timeframes:     {', '.join(strategy['timeframes'])}")
+            
             text_lines.append("")
         
-        # Indicators and patterns
-        text_lines.append("Technical Indicators Used:")
-        for pattern in analysis['patterns']:
-            if 'Moving Average' in pattern['type']:
-                text_lines.append("- Moving Average (Period: 14)")
-                text_lines.append("  Used for trend direction analysis")
-            elif 'RSI' in pattern['type']:
-                text_lines.append("- Relative Strength Index (Period: 14)")
-                text_lines.append("  Used for overbought/oversold conditions")
-            elif 'Trading' in pattern['type']:
-                text_lines.append("- Trading Functions Detected")
-                text_lines.append("  Implements order execution logic")
+        # Input parameters section
+        input_params = analysis.get('input_parameters', [])
+        if input_params:
+            text_lines.append("INPUT PARAMETERS")
+            text_lines.append("-" * 70)
+            for param in input_params:
+                text_lines.append(f"  • {param['name']:<20} ({param['type']}, default: {param['default']})")
+            text_lines.append("")
+        
+        # Technical indicators section
+        indicators_used = strategy.get('indicators_used', []) if strategy else []
+        if indicators_used:
+            text_lines.append("TECHNICAL INDICATORS")
+            text_lines.append("-" * 70)
+            for indicator in indicators_used:
+                text_lines.append(f"  • {indicator}")
+                
+                # Add descriptions for each indicator
+                if 'Moving Average' in indicator:
+                    text_lines.append("    Purpose: Identifies trend direction and support/resistance levels")
+                elif 'RSI' in indicator:
+                    text_lines.append("    Purpose: Measures overbought/oversold conditions (0-100 scale)")
+                elif 'MACD' in indicator:
+                    text_lines.append("    Purpose: Momentum and trend-following indicator")
+                elif 'ATR' in indicator:
+                    text_lines.append("    Purpose: Volatility measurement for stop-loss placement")
+                elif 'Bollinger Bands' in indicator:
+                    text_lines.append("    Purpose: Price volatility and potential reversal zones")
+                elif 'Stochastic' in indicator:
+                    text_lines.append("    Purpose: Momentum indicator comparing closing price to range")
+            
+            text_lines.append("")
+        
+        # Risk management section
+        risk_mgmt = analysis.get('risk_management', {})
+        if risk_mgmt and risk_mgmt.get('features'):
+            text_lines.append("RISK MANAGEMENT")
+            text_lines.append("-" * 70)
+            for feature in risk_mgmt['features']:
+                text_lines.append(f"  ✓ {feature}")
+            text_lines.append("")
+        
+        # Entry and exit patterns
+        if strategy:
+            if strategy.get('entry_patterns'):
+                text_lines.append("ENTRY PATTERNS")
+                text_lines.append("-" * 70)
+                for pattern in strategy['entry_patterns']:
+                    text_lines.append(f"  • {pattern}")
+                text_lines.append("")
+            
+            if strategy.get('exit_patterns'):
+                text_lines.append("EXIT PATTERNS")
+                text_lines.append("-" * 70)
+                for pattern in strategy['exit_patterns']:
+                    text_lines.append(f"  • {pattern}")
+                text_lines.append("")
+        
+        # Functions detected
+        functions = analysis.get('functions', [])
+        if functions:
+            text_lines.append("DETECTED FUNCTIONS")
+            text_lines.append("-" * 70)
+            for func in functions:
+                text_lines.append(f"  • {func}()")
+            text_lines.append("")
+        
+        # Operation logic
+        text_lines.append("OPERATIONAL LOGIC")
+        text_lines.append("-" * 70)
+        if analysis['metadata']['type'] == 'Expert Advisor':
+            text_lines.append("This Expert Advisor operates as follows:")
+            text_lines.append("")
+            text_lines.append("1. INITIALIZATION (OnInit)")
+            text_lines.append("   - Sets up input parameters")
+            if indicators_used:
+                text_lines.append("   - Initializes technical indicators:")
+                for ind in indicators_used[:3]:  # Show first 3
+                    text_lines.append(f"     * {ind}")
+            if risk_mgmt.get('features'):
+                text_lines.append("   - Configures risk management:")
+                for feat in risk_mgmt['features'][:2]:  # Show first 2
+                    text_lines.append(f"     * {feat}")
+            text_lines.append("")
+            
+            text_lines.append("2. TICK PROCESSING (OnTick)")
+            text_lines.append("   - Updates all indicator values")
+            text_lines.append("   - Analyzes current market conditions")
+            if strategy.get('entry_patterns'):
+                text_lines.append("   - Checks entry conditions")
+            if strategy.get('exit_patterns'):
+                text_lines.append("   - Manages existing positions")
+            text_lines.append("   - Executes trading decisions")
+            text_lines.append("")
+            
+            text_lines.append("3. CLEANUP (OnDeinit)")
+            text_lines.append("   - Releases resources")
+            text_lines.append("   - Saves final state")
+        else:
+            text_lines.append("This Indicator operates as follows:")
+            text_lines.append("")
+            text_lines.append("1. INITIALIZATION")
+            text_lines.append("   - Sets up indicator buffers")
+            text_lines.append("   - Configures drawing styles")
+            text_lines.append("")
+            text_lines.append("2. CALCULATION")
+            text_lines.append("   - Processes historical price data")
+            if indicators_used:
+                text_lines.append("   - Calculates indicator values")
+            text_lines.append("   - Updates display buffers")
+            text_lines.append("")
+            text_lines.append("3. VISUALIZATION")
+            text_lines.append("   - Draws indicator lines on chart")
+            text_lines.append("   - Updates in real-time with new price data")
         
         text_lines.append("")
-        text_lines.append("Strategy Logic:")
-        if analysis['metadata']['type'] == 'Expert Advisor':
-            text_lines.append("1. Initializes technical indicators")
-            text_lines.append("2. On each tick:")
-            text_lines.append("   - Updates indicator values")
-            text_lines.append("   - Checks trading conditions")
-            text_lines.append("   - Executes trades if conditions are met")
-        else:
-            text_lines.append("1. Calculates indicator values")
-            text_lines.append("2. Displays results on the chart")
+        
+        # Analysis summary
+        text_lines.append("ANALYSIS SUMMARY")
+        text_lines.append("-" * 70)
+        text_lines.append(f"Total Patterns Found:     {len(analysis.get('patterns', []))}")
+        text_lines.append(f"String Extracted:         {stats.get('total_strings', 0)}")
+        text_lines.append(f"Functions Identified:     {len(functions)}")
+        text_lines.append(f"Indicators Used:          {len(indicators_used)}")
+        text_lines.append("")
+        
+        # Limitations notice
+        text_lines.append("IMPORTANT NOTES")
+        text_lines.append("-" * 70)
+        text_lines.append("• This analysis is based on pattern recognition and may not be 100% accurate")
+        text_lines.append("• Original variable names and comments cannot be recovered")
+        text_lines.append("• Generated code templates require manual review and adjustment")
+        text_lines.append("• Always test thoroughly before using in live trading")
+        text_lines.append("")
+        text_lines.append("=" * 70)
         
         return "\n".join(text_lines)
 
