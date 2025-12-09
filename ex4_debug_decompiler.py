@@ -23,23 +23,63 @@ class MT4Analyzer:
             b'extern': 'External Variable',
             b'buffer': 'Indicator Buffer',
             
-            # MQL4 specific patterns
+            # MQL4 specific patterns - Enhanced
             b'OrderSend': 'MQL4 Trading Function',
+            b'OrderClose': 'MQL4 Order Close',
+            b'OrderModify': 'MQL4 Order Modify',
+            b'OrderDelete': 'MQL4 Order Delete',
             b'iCustom': 'MQL4 Custom Indicator',
             b'iMA': 'MQL4 Moving Average',
             b'iRSI': 'MQL4 RSI',
             b'iATR': 'MQL4 ATR',
+            b'iMACD': 'MQL4 MACD',
+            b'iBands': 'MQL4 Bollinger Bands',
+            b'iStochastic': 'MQL4 Stochastic',
+            b'iCCI': 'MQL4 CCI',
+            b'iADX': 'MQL4 ADX',
+            b'iIchimoku': 'MQL4 Ichimoku',
+            b'iFractals': 'MQL4 Fractals',
+            b'iAlligator': 'MQL4 Alligator',
+            b'iSAR': 'MQL4 Parabolic SAR',
             
-            # MQL5 specific patterns
+            # MQL5 specific patterns - Enhanced
             b'CTrade': 'MQL5 Trading Class',
             b'CCustomInd': 'MQL5 Custom Indicator',
             b'CiMA': 'MQL5 Moving Average',
             b'CiRSI': 'MQL5 RSI',
-            b'CiATR': 'MQL5 ATR'
+            b'CiATR': 'MQL5 ATR',
+            b'CiMACD': 'MQL5 MACD',
+            b'CiBands': 'MQL5 Bollinger Bands',
+            b'CiStochastic': 'MQL5 Stochastic',
+            
+            # Trading Strategy Patterns - New
+            b'Martingale': 'Martingale Strategy',
+            b'Grid': 'Grid Trading Strategy',
+            b'Hedg': 'Hedging Strategy',
+            b'Scalp': 'Scalping Strategy',
+            b'Breakout': 'Breakout Strategy',
+            b'Trend': 'Trend Following Strategy',
+            
+            # Timeframe patterns - New
+            b'PERIOD_M1': 'M1 Timeframe',
+            b'PERIOD_M5': 'M5 Timeframe',
+            b'PERIOD_M15': 'M15 Timeframe',
+            b'PERIOD_M30': 'M30 Timeframe',
+            b'PERIOD_H1': 'H1 Timeframe',
+            b'PERIOD_H4': 'H4 Timeframe',
+            b'PERIOD_D1': 'D1 Timeframe',
+            b'PERIOD_W1': 'W1 Timeframe',
+            
+            # Risk Management - New
+            b'StopLoss': 'Stop Loss Management',
+            b'TakeProfit': 'Take Profit Management',
+            b'TrailingStop': 'Trailing Stop',
+            b'MoneyManagement': 'Money Management',
+            b'RiskPercent': 'Risk Percentage',
         }
 
     def analyze_file(self, filepath):
-        """Analyze an EX4 file with detailed error reporting"""
+        """Analyze an EX4 file with enhanced detailed error reporting"""
         try:
             logging.info(f"Starting analysis of {filepath}")
             
@@ -56,11 +96,20 @@ class MT4Analyzer:
             if not data.startswith(b'MZ'):
                 logging.warning("File does not start with MZ header")
             
+            # Extract strings first for categorization
+            strings = self.extract_strings(data)
+            string_categories = self.categorize_strings(strings)
+            
             analysis = {
                 'metadata': self.extract_metadata(data),
                 'patterns': self.find_patterns(data),
-                'strings': self.extract_strings(data),
-                'functions': self.identify_functions(data)
+                'strings': strings,
+                'string_categories': string_categories,
+                'functions': self.identify_functions(data),
+                'input_parameters': self.extract_input_parameters(data, string_categories),
+                'trading_strategy': self.analyze_trading_strategy(data),
+                'risk_management': self.analyze_risk_management(data),
+                'statistics': self.generate_statistics(data, strings)
             }
             
             logging.info("Analysis completed successfully")
@@ -73,30 +122,79 @@ class MT4Analyzer:
                 'metadata': {'type': 'Unknown', 'version': 'Unknown'},
                 'patterns': [],
                 'strings': [],
-                'functions': []
+                'string_categories': {},
+                'functions': [],
+                'input_parameters': [],
+                'trading_strategy': {},
+                'risk_management': {},
+                'statistics': {}
             }
 
     def extract_metadata(self, data):
-        """Extract basic metadata with error handling"""
+        """Extract enhanced metadata with better timestamp and details"""
         try:
             metadata = {
                 'type': 'Unknown',
                 'version': 'Unknown',
-                'creation_date': 'Unknown'
+                'creation_date': 'Unknown',
+                'file_size': len(data),
+                'copyright': 'Unknown',
+                'description': 'Unknown',
+                'author': 'Unknown',
+                'link': 'Unknown'
             }
             
-            # Determine type
+            # Determine type with priority order
             if b'indicator' in data.lower():
                 metadata['type'] = 'Indicator'
-            elif b'expert' in data.lower():
+            elif b'expert' in data.lower() or b'EA' in data:
                 metadata['type'] = 'Expert Advisor'
             elif b'script' in data.lower():
                 metadata['type'] = 'Script'
                 
-            # Look for version information
-            version_match = re.search(b'version[\\s=]+(\\d+\\.\\d+)', data, re.IGNORECASE)
-            if version_match:
-                metadata['version'] = version_match.group(1).decode('ascii', errors='ignore')
+            # Look for version information - enhanced patterns
+            version_patterns = [
+                b'version[\\s=:]+(\\d+\\.\\d+(?:\\.\\d+)?)',
+                b'v[\\s]*(\\d+\\.\\d+(?:\\.\\d+)?)',
+                b'ver[\\s]*(\\d+\\.\\d+(?:\\.\\d+)?)'
+            ]
+            for pattern in version_patterns:
+                version_match = re.search(pattern, data, re.IGNORECASE)
+                if version_match:
+                    metadata['version'] = version_match.group(1).decode('ascii', errors='ignore')
+                    break
+            
+            # Extract PE timestamp if available (Enhanced)
+            if data.startswith(b'MZ') and len(data) > 0x3C:
+                try:
+                    pe_offset = struct.unpack('<I', data[0x3C:0x40])[0]
+                    if pe_offset < len(data) - 8 and data[pe_offset:pe_offset+4] == b'PE\x00\x00':
+                        timestamp = struct.unpack('<I', data[pe_offset+8:pe_offset+12])[0]
+                        if timestamp > 0:
+                            creation_time = datetime.fromtimestamp(timestamp)
+                            metadata['creation_date'] = creation_time.strftime('%Y-%m-%d %H:%M:%S')
+                except Exception as e:
+                    logging.debug(f"Could not extract PE timestamp: {e}")
+            
+            # Extract copyright information
+            copyright_match = re.search(b'copyright[\\s]*[:\\(]?[\\s]*([^\x00]{3,50})', data, re.IGNORECASE)
+            if copyright_match:
+                metadata['copyright'] = copyright_match.group(1).decode('ascii', errors='ignore').strip()
+            
+            # Extract description
+            desc_match = re.search(b'description[\\s]*[:\\(]?[\\s]*([^\x00]{3,100})', data, re.IGNORECASE)
+            if desc_match:
+                metadata['description'] = desc_match.group(1).decode('ascii', errors='ignore').strip()
+            
+            # Extract author
+            author_match = re.search(b'author[\\s]*[:\\(]?[\\s]*([^\x00]{3,50})', data, re.IGNORECASE)
+            if author_match:
+                metadata['author'] = author_match.group(1).decode('ascii', errors='ignore').strip()
+            
+            # Extract link/URL
+            link_match = re.search(b'(https?://[^\x00\\s]{3,100})', data, re.IGNORECASE)
+            if link_match:
+                metadata['link'] = link_match.group(1).decode('ascii', errors='ignore').strip()
                 
             logging.info(f"Extracted metadata: {metadata}")
             return metadata
@@ -124,10 +222,12 @@ class MT4Analyzer:
             return []
 
     def extract_strings(self, data):
-        """Extract readable strings from the binary"""
+        """Extract readable strings with Unicode support and categorization"""
         try:
             strings = []
             current = ''
+            
+            # ASCII string extraction
             for byte in data:
                 if 32 <= byte <= 126:  # printable ASCII
                     current += chr(byte)
@@ -135,13 +235,117 @@ class MT4Analyzer:
                     if len(current) > 3:  # minimum length
                         strings.append(current)
                     current = ''
+            
+            # Add last string if exists
+            if current and len(current) > 3:
+                strings.append(current)
+            
+            # Try to extract Unicode strings (UTF-16LE is common in Windows binaries)
+            try:
+                i = 0
+                while i < len(data) - 1:
+                    # Look for potential UTF-16LE strings
+                    if data[i] != 0 and data[i+1] == 0:  # Potential start of UTF-16LE
+                        unicode_str = bytearray()
+                        j = i
+                        while j < len(data) - 1 and j < i + 200:  # Limit length
+                            if data[j] == 0 and data[j+1] == 0:  # End of string
+                                break
+                            if data[j] != 0 and data[j+1] == 0 and 32 <= data[j] <= 126:
+                                unicode_str.append(data[j])
+                                j += 2
+                            else:
+                                break
+                        
+                        if len(unicode_str) > 3:
+                            try:
+                                decoded = unicode_str.decode('ascii', errors='ignore')
+                                if decoded and decoded not in strings:
+                                    strings.append(decoded)
+                            except:
+                                pass
+                        i = j
+                    i += 1
+            except Exception as e:
+                logging.debug(f"Unicode extraction error: {e}")
+            
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_strings = []
+            for s in strings:
+                if s not in seen:
+                    seen.add(s)
+                    unique_strings.append(s)
                     
-            logging.info(f"Extracted {len(strings)} strings")
-            return strings
+            logging.info(f"Extracted {len(unique_strings)} unique strings")
+            return unique_strings
             
         except Exception as e:
             logging.error(f"Error extracting strings: {str(e)}", exc_info=True)
             return []
+    
+    def categorize_strings(self, strings):
+        """Categorize extracted strings for better analysis"""
+        categories = {
+            'functions': [],
+            'variables': [],
+            'indicators': [],
+            'symbols': [],
+            'parameters': [],
+            'comments': [],
+            'other': []
+        }
+        
+        # Function-like patterns
+        function_patterns = [
+            'OnInit', 'OnDeinit', 'OnTick', 'OnCalculate', 'OnStart',
+            'OrderSend', 'OrderClose', 'OrderModify', 'iMA', 'iRSI',
+            'SetIndexBuffer', 'SetIndexStyle'
+        ]
+        
+        # Variable/parameter patterns
+        param_patterns = ['period', 'shift', 'method', 'price', 'lot', 'stop', 'take']
+        
+        # Indicator patterns
+        indicator_patterns = ['MA', 'RSI', 'MACD', 'ATR', 'Bollinger', 'Stochastic']
+        
+        for s in strings:
+            categorized = False
+            s_lower = s.lower()
+            
+            # Check functions
+            for pattern in function_patterns:
+                if pattern.lower() in s_lower:
+                    categories['functions'].append(s)
+                    categorized = True
+                    break
+            
+            if not categorized:
+                # Check parameters
+                for pattern in param_patterns:
+                    if pattern in s_lower:
+                        categories['parameters'].append(s)
+                        categorized = True
+                        break
+            
+            if not categorized:
+                # Check indicators
+                for pattern in indicator_patterns:
+                    if pattern.lower() in s_lower:
+                        categories['indicators'].append(s)
+                        categorized = True
+                        break
+            
+            if not categorized:
+                # Check if it looks like a symbol (e.g., EURUSD, GBPUSD)
+                if len(s) == 6 and s.isalpha() and s.isupper():
+                    categories['symbols'].append(s)
+                elif '#' in s or '//' in s:
+                    categories['comments'].append(s)
+                else:
+                    categories['other'].append(s)
+        
+        return categories
 
     def identify_functions(self, data):
         """Identify potential functions in the binary"""
@@ -167,6 +371,202 @@ class MT4Analyzer:
         except Exception as e:
             logging.error(f"Error identifying functions: {str(e)}", exc_info=True)
             return []
+    
+    def extract_input_parameters(self, data, string_categories):
+        """Extract input parameters with type inference"""
+        try:
+            parameters = []
+            param_strings = string_categories.get('parameters', [])
+            
+            # Common parameter patterns with type hints
+            type_keywords = {
+                'period': ('int', 14),
+                'shift': ('int', 0),
+                'lot': ('double', 0.1),
+                'lots': ('double', 0.1),
+                'stoploss': ('int', 50),
+                'takeprofit': ('int', 100),
+                'maxlots': ('double', 1.0),
+                'slippage': ('int', 3),
+                'magic': ('int', 12345),
+                'risk': ('double', 1.0),
+                'percent': ('double', 2.0),
+            }
+            
+            for param in param_strings:
+                param_lower = param.lower()
+                param_type = 'int'
+                default_value = 0
+                
+                # Infer type from common patterns
+                for keyword, (typ, default) in type_keywords.items():
+                    if keyword in param_lower:
+                        param_type = typ
+                        default_value = default
+                        break
+                
+                parameters.append({
+                    'name': param,
+                    'type': param_type,
+                    'default': default_value
+                })
+            
+            return parameters
+        except Exception as e:
+            logging.error(f"Error extracting parameters: {e}")
+            return []
+    
+    def analyze_trading_strategy(self, data):
+        """Analyze and identify trading strategy patterns"""
+        try:
+            strategy = {
+                'type': 'Unknown',
+                'indicators_used': [],
+                'entry_patterns': [],
+                'exit_patterns': [],
+                'timeframes': []
+            }
+            
+            # Detect strategy type
+            if b'Martingale' in data or b'martingale' in data:
+                strategy['type'] = 'Martingale'
+            elif b'Grid' in data or b'grid' in data:
+                strategy['type'] = 'Grid Trading'
+            elif b'Scalp' in data or b'scalp' in data:
+                strategy['type'] = 'Scalping'
+            elif b'Breakout' in data or b'breakout' in data:
+                strategy['type'] = 'Breakout'
+            elif b'Trend' in data or b'trend' in data:
+                strategy['type'] = 'Trend Following'
+            elif b'Hedg' in data:
+                strategy['type'] = 'Hedging'
+            
+            # Detect indicators used
+            indicator_list = [
+                (b'iMA', 'Moving Average'),
+                (b'iRSI', 'RSI'),
+                (b'iMACD', 'MACD'),
+                (b'iATR', 'ATR'),
+                (b'iBands', 'Bollinger Bands'),
+                (b'iStochastic', 'Stochastic'),
+                (b'iCCI', 'CCI'),
+                (b'iADX', 'ADX'),
+            ]
+            
+            for pattern, name in indicator_list:
+                if pattern in data:
+                    strategy['indicators_used'].append(name)
+            
+            # Detect timeframes
+            timeframes = [
+                (b'PERIOD_M1', 'M1'),
+                (b'PERIOD_M5', 'M5'),
+                (b'PERIOD_M15', 'M15'),
+                (b'PERIOD_M30', 'M30'),
+                (b'PERIOD_H1', 'H1'),
+                (b'PERIOD_H4', 'H4'),
+                (b'PERIOD_D1', 'D1'),
+            ]
+            
+            for pattern, name in timeframes:
+                if pattern in data:
+                    strategy['timeframes'].append(name)
+            
+            # Detect entry patterns
+            if b'Buy' in data and b'Signal' in data:
+                strategy['entry_patterns'].append('Buy Signal Based')
+            if b'Sell' in data and b'Signal' in data:
+                strategy['entry_patterns'].append('Sell Signal Based')
+            if b'Cross' in data or b'cross' in data:
+                strategy['entry_patterns'].append('Indicator Crossover')
+            
+            # Detect exit patterns
+            if b'StopLoss' in data or b'SL' in data:
+                strategy['exit_patterns'].append('Stop Loss')
+            if b'TakeProfit' in data or b'TP' in data:
+                strategy['exit_patterns'].append('Take Profit')
+            if b'TrailingStop' in data:
+                strategy['exit_patterns'].append('Trailing Stop')
+            
+            return strategy
+        except Exception as e:
+            logging.error(f"Error analyzing strategy: {e}")
+            return {}
+    
+    def analyze_risk_management(self, data):
+        """Analyze risk management features"""
+        try:
+            risk_mgmt = {
+                'has_stop_loss': b'StopLoss' in data or b'SL' in data,
+                'has_take_profit': b'TakeProfit' in data or b'TP' in data,
+                'has_trailing_stop': b'TrailingStop' in data,
+                'has_money_management': b'MoneyManagement' in data or b'MM' in data,
+                'has_risk_percent': b'RiskPercent' in data or b'Risk' in data,
+                'has_max_lots': b'MaxLots' in data or b'MaxLot' in data,
+                'has_max_orders': b'MaxOrders' in data or b'MaxTrades' in data,
+                'features': []
+            }
+            
+            # Build features list
+            if risk_mgmt['has_stop_loss']:
+                risk_mgmt['features'].append('Stop Loss Protection')
+            if risk_mgmt['has_take_profit']:
+                risk_mgmt['features'].append('Take Profit Targets')
+            if risk_mgmt['has_trailing_stop']:
+                risk_mgmt['features'].append('Trailing Stop')
+            if risk_mgmt['has_money_management']:
+                risk_mgmt['features'].append('Money Management')
+            if risk_mgmt['has_risk_percent']:
+                risk_mgmt['features'].append('Risk Percentage Based')
+            if risk_mgmt['has_max_lots']:
+                risk_mgmt['features'].append('Maximum Lot Size Limit')
+            if risk_mgmt['has_max_orders']:
+                risk_mgmt['features'].append('Maximum Order Limit')
+            
+            return risk_mgmt
+        except Exception as e:
+            logging.error(f"Error analyzing risk management: {e}")
+            return {}
+    
+    def generate_statistics(self, data, strings):
+        """Generate statistics about the analysis"""
+        try:
+            stats = {
+                'file_size_bytes': len(data),
+                'file_size_kb': round(len(data) / 1024, 2),
+                'total_strings': len(strings),
+                'unique_strings': len(set(strings)),
+                'has_mz_header': data.startswith(b'MZ'),
+                'entropy': self.calculate_entropy(data)
+            }
+            return stats
+        except Exception as e:
+            logging.error(f"Error generating statistics: {e}")
+            return {}
+    
+    def calculate_entropy(self, data):
+        """Calculate Shannon entropy of the data"""
+        try:
+            from collections import Counter
+            import math
+            
+            if not data:
+                return 0
+            
+            # Count byte frequencies
+            counts = Counter(data)
+            total = len(data)
+            
+            # Calculate entropy
+            entropy = 0
+            for count in counts.values():
+                probability = count / total
+                entropy -= probability * math.log2(probability)
+            
+            return round(entropy, 4)
+        except Exception as e:
+            logging.debug(f"Entropy calculation error: {e}")
+            return 0
 
     def generate_pseudocode(self, analysis, language='MQL4'):
         """Generate pseudocode in the specified language format"""
@@ -190,16 +590,27 @@ class MT4Analyzer:
             return f"// Error generating {language} pseudocode: {str(e)}"
 
     def generate_mql4_code(self, analysis):
-        """Generate MQL4 pseudocode"""
+        """Generate enhanced MQL4 pseudocode with better context"""
         code_lines = []
         
-        # Add header
+        # Add header with more metadata
         code_lines.append("//+------------------------------------------------------------------+")
         code_lines.append("//|                    Decompiled MQL4 Program                       |")
         code_lines.append("//|                    Type: " + analysis['metadata']['type'].ljust(41) + "|")
         code_lines.append("//|                    Version: " + str(analysis['metadata']['version']).ljust(39) + "|")
+        if analysis['metadata'].get('creation_date', 'Unknown') != 'Unknown':
+            code_lines.append("//|                    Created: " + str(analysis['metadata']['creation_date']).ljust(38) + "|")
+        if analysis['metadata'].get('copyright', 'Unknown') != 'Unknown':
+            code_lines.append("//|                    Copyright: " + str(analysis['metadata']['copyright'])[:37].ljust(37) + "|")
         code_lines.append("//+------------------------------------------------------------------+")
         code_lines.append("")
+        
+        # Add trading strategy comment if detected
+        if analysis.get('trading_strategy', {}).get('type', 'Unknown') != 'Unknown':
+            code_lines.append(f"// Trading Strategy: {analysis['trading_strategy']['type']}")
+            if analysis['trading_strategy'].get('indicators_used'):
+                code_lines.append(f"// Indicators: {', '.join(analysis['trading_strategy']['indicators_used'])}")
+            code_lines.append("")
         
         # Properties
         if analysis['metadata']['type'] == 'Indicator':
@@ -207,16 +618,19 @@ class MT4Analyzer:
             code_lines.append("#property indicator_buffers 1")
             code_lines.append("")
         
-        # External parameters
-        externals_found = False
-        for string in analysis['strings']:
-            if 'period' in string.lower() or 'shift' in string.lower() or 'price' in string.lower():
-                if not externals_found:
-                    code_lines.append("// Input Parameters")
-                    externals_found = True
-                code_lines.append(f"extern int {string} = 0;")
-        
-        if externals_found:
+        # External parameters - use extracted parameters
+        input_params = analysis.get('input_parameters', [])
+        if input_params:
+            code_lines.append("// Input Parameters (inferred from analysis)")
+            for param in input_params:
+                code_lines.append(f"extern {param['type']} {param['name']} = {param['default']};")
+            code_lines.append("")
+        elif 'period' in str(analysis['strings']).lower():
+            # Fallback to old method if new extraction didn't work
+            code_lines.append("// Input Parameters")
+            for string in analysis['strings']:
+                if 'period' in string.lower() or 'shift' in string.lower() or 'price' in string.lower():
+                    code_lines.append(f"extern int {string} = 0;")
             code_lines.append("")
         
         # Global variables
@@ -226,39 +640,88 @@ class MT4Analyzer:
             code_lines.append("")
         
         # Functions
+        code_lines.append("//+------------------------------------------------------------------+")
+        code_lines.append("//| Initialization function                                          |")
+        code_lines.append("//+------------------------------------------------------------------+")
         code_lines.append("int init()")
         code_lines.append("{")
         if analysis['metadata']['type'] == 'Indicator':
+            code_lines.append("    // Setup indicator buffers")
             code_lines.append("    SetIndexStyle(0, DRAW_LINE);")
             code_lines.append("    SetIndexBuffer(0, Buffer1);")
+            code_lines.append("    SetIndexLabel(0, \"Main Buffer\");")
         code_lines.append("    return(0);")
         code_lines.append("}")
         code_lines.append("")
         
+        code_lines.append("//+------------------------------------------------------------------+")
+        code_lines.append("//| Deinitialization function                                        |")
+        code_lines.append("//+------------------------------------------------------------------+")
         code_lines.append("int deinit()")
         code_lines.append("{")
         code_lines.append("    return(0);")
         code_lines.append("}")
         code_lines.append("")
         
-        # Main function
+        # Main function with enhanced pattern detection
+        code_lines.append("//+------------------------------------------------------------------+")
         if analysis['metadata']['type'] == 'Expert Advisor':
+            code_lines.append("//| Expert tick function (called on every tick)                     |")
+            code_lines.append("//+------------------------------------------------------------------+")
             code_lines.append("void OnTick()")
         else:
+            code_lines.append("//| Custom indicator iteration function                              |")
+            code_lines.append("//+------------------------------------------------------------------+")
             code_lines.append("int start()")
         code_lines.append("{")
         
-        # Add detected patterns
-        for pattern in analysis['patterns']:
-            if 'MQL4' in pattern['type']:
-                if 'Moving Average' in pattern['type']:
-                    code_lines.append("    double ma = iMA(Symbol(), Period(), 14, 0, MODE_SMA, PRICE_CLOSE, 0);")
-                elif 'RSI' in pattern['type']:
-                    code_lines.append("    double rsi = iRSI(Symbol(), Period(), 14, PRICE_CLOSE, 0);")
-                elif 'Trading Function' in pattern['type']:
-                    code_lines.append("    if(OrdersTotal() < 1) {")
-                    code_lines.append("        OrderSend(Symbol(), OP_BUY, 0.1, Ask, 3, 0, 0);")
-                    code_lines.append("    }")
+        # Add detected indicators calculations
+        indicators_used = analysis.get('trading_strategy', {}).get('indicators_used', [])
+        if 'Moving Average' in indicators_used:
+            code_lines.append("    // Moving Average calculation (detected)")
+            code_lines.append("    double ma = iMA(Symbol(), Period(), 14, 0, MODE_SMA, PRICE_CLOSE, 0);")
+        if 'RSI' in indicators_used:
+            code_lines.append("    // RSI calculation (detected)")
+            code_lines.append("    double rsi = iRSI(Symbol(), Period(), 14, PRICE_CLOSE, 0);")
+        if 'MACD' in indicators_used:
+            code_lines.append("    // MACD calculation (detected)")
+            code_lines.append("    double macd = iMACD(Symbol(), Period(), 12, 26, 9, PRICE_CLOSE, MODE_MAIN, 0);")
+        if 'ATR' in indicators_used:
+            code_lines.append("    // ATR calculation (detected)")
+            code_lines.append("    double atr = iATR(Symbol(), Period(), 14, 0);")
+        if 'Bollinger Bands' in indicators_used:
+            code_lines.append("    // Bollinger Bands calculation (detected)")
+            code_lines.append("    double bb_upper = iBands(Symbol(), Period(), 20, 2, 0, PRICE_CLOSE, MODE_UPPER, 0);")
+            code_lines.append("    double bb_lower = iBands(Symbol(), Period(), 20, 2, 0, PRICE_CLOSE, MODE_LOWER, 0);")
+        
+        # Add trading logic for EA
+        if analysis['metadata']['type'] == 'Expert Advisor':
+            code_lines.append("")
+            code_lines.append("    // Trading logic (pattern detected)")
+            
+            # Check risk management
+            risk_mgmt = analysis.get('risk_management', {})
+            if risk_mgmt.get('has_stop_loss') or risk_mgmt.get('has_take_profit'):
+                code_lines.append("    // Risk management parameters")
+                if risk_mgmt.get('has_stop_loss'):
+                    code_lines.append("    double stopLoss = 50 * Point;  // Adjust as needed")
+                if risk_mgmt.get('has_take_profit'):
+                    code_lines.append("    double takeProfit = 100 * Point;  // Adjust as needed")
+            
+            code_lines.append("    ")
+            code_lines.append("    // Check for entry conditions")
+            code_lines.append("    if(OrdersTotal() < 1) {")
+            code_lines.append("        // Entry logic based on detected strategy")
+            
+            for pattern in analysis['patterns']:
+                if 'Trading Function' in pattern['type']:
+                    code_lines.append("        int ticket = OrderSend(Symbol(), OP_BUY, 0.1, Ask, 3, 0, 0, \"Auto Trade\", 0, 0, clrGreen);")
+                    code_lines.append("        if(ticket > 0) {")
+                    code_lines.append("            Print(\"Order opened successfully: \", ticket);")
+                    code_lines.append("        }")
+                    break
+            
+            code_lines.append("    }")
         
         if analysis['metadata']['type'] != 'Expert Advisor':
             code_lines.append("    return(0);")
