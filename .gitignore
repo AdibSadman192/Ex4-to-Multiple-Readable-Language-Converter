@@ -44,4 +44,4 @@ Thumbs.db
 *.ex4
 *.ex5
 test_output/
-screenshots/
+test_outputs/
