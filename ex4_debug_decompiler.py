@@ -7,6 +7,8 @@ import re
 import json
 from datetime import datetime
 import logging
+from collections import Counter
+import math
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG,
@@ -547,9 +549,6 @@ class MT4Analyzer:
     def calculate_entropy(self, data):
         """Calculate Shannon entropy of the data"""
         try:
-            from collections import Counter
-            import math
-            
             if not data:
                 return 0
             
@@ -901,7 +900,10 @@ class MT4Analyzer:
         # Class definition
         class_name = 'TradingIndicator' if analysis['metadata']['type'] == 'Indicator' else 'TradingExpert'
         if analysis.get('filepath'):
-            class_name = os.path.splitext(os.path.basename(analysis['filepath']))[0]
+            extracted_name = os.path.splitext(os.path.basename(analysis['filepath']))[0]
+            # Only use extracted name if it's valid (not empty, contains alphanumeric)
+            if extracted_name and extracted_name.replace('_', '').isalnum():
+                class_name = extracted_name
         
         code_lines.append(f"class {class_name}:")
         code_lines.append(f'    """')
@@ -1333,7 +1335,7 @@ class MT4Analyzer:
         text_lines.append("ANALYSIS SUMMARY")
         text_lines.append("-" * 70)
         text_lines.append(f"Total Patterns Found:     {len(analysis.get('patterns', []))}")
-        text_lines.append(f"String Extracted:         {stats.get('total_strings', 0)}")
+        text_lines.append(f"Strings Extracted:        {stats.get('total_strings', 0)}")
         text_lines.append(f"Functions Identified:     {len(functions)}")
         text_lines.append(f"Indicators Used:          {len(indicators_used)}")
         text_lines.append("")
