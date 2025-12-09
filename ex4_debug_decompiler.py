@@ -758,20 +758,20 @@ class DebugDecompilerGUI:
         btn_container.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
         self.open_btn = ttk.Button(btn_container, 
-                                   text="📂 Select EX4 File", 
+                                   text="Select EX4 File", 
                                    command=self.select_file,
                                    style='Modern.TButton')
         self.open_btn.pack(side=tk.LEFT, padx=5)
         
         self.save_analysis_btn = ttk.Button(btn_container, 
-                                           text="💾 Save Analysis", 
+                                           text="Save Analysis", 
                                            command=self.save_analysis,
                                            style='Modern.TButton')
         self.save_analysis_btn.pack(side=tk.LEFT, padx=5)
         self.save_analysis_btn.state(['disabled'])
         
         self.save_code_btn = ttk.Button(btn_container, 
-                                       text="💾 Save Code", 
+                                       text="Save Code", 
                                        command=self.save_pseudocode,
                                        style='Modern.TButton')
         self.save_code_btn.pack(side=tk.LEFT, padx=5)
@@ -788,7 +788,7 @@ class DebugDecompilerGUI:
         
         # Analysis tab with better formatting
         self.analysis_frame = ttk.Frame(self.notebook, padding=10)
-        self.notebook.add(self.analysis_frame, text="📊 Analysis")
+        self.notebook.add(self.analysis_frame, text="Analysis")
         
         self.analysis_text = scrolledtext.ScrolledText(
             self.analysis_frame, 
@@ -804,7 +804,7 @@ class DebugDecompilerGUI:
         
         # Pseudocode tab
         self.pseudo_frame = ttk.Frame(self.notebook, padding=10)
-        self.notebook.add(self.pseudo_frame, text="📝 Generated Code")
+        self.notebook.add(self.pseudo_frame, text="Generated Code")
         
         self.pseudo_text = scrolledtext.ScrolledText(
             self.pseudo_frame, 
@@ -820,7 +820,7 @@ class DebugDecompilerGUI:
         
         # Debug log tab
         self.debug_frame = ttk.Frame(self.notebook, padding=10)
-        self.notebook.add(self.debug_frame, text="🔍 Debug Log")
+        self.notebook.add(self.debug_frame, text="Debug Log")
         
         self.debug_text = scrolledtext.ScrolledText(
             self.debug_frame, 
@@ -856,15 +856,20 @@ class DebugDecompilerGUI:
     def on_language_change(self, event=None):
         """Handle language selection change"""
         if self.current_analysis:
-            self.status_var.set(f"Regenerating code in {self.language_var.get()}...")
+            self.status_var.set(f"⏳ Regenerating code in {self.language_var.get()}...")
             self.root.update()
-            self.current_pseudocode = self.analyzer.generate_pseudocode(
-                self.current_analysis, 
-                self.language_var.get()
-            )
-            self.pseudo_text.delete(1.0, tk.END)
-            self.pseudo_text.insert(tk.END, self.current_pseudocode)
-            self.status_var.set(f"Code regenerated in {self.language_var.get()}")
+            
+            try:
+                self.current_pseudocode = self.analyzer.generate_pseudocode(
+                    self.current_analysis, 
+                    self.language_var.get()
+                )
+                self.pseudo_text.delete(1.0, tk.END)
+                self.pseudo_text.insert(tk.END, self.current_pseudocode)
+                self.status_var.set(f"✓ Code regenerated in {self.language_var.get()}")
+            except Exception as e:
+                logging.error(f"Error regenerating code: {str(e)}", exc_info=True)
+                self.status_var.set(f"✗ Error regenerating code: {str(e)}")
 
     def setup_logging(self):
         class TextHandler(logging.Handler):
