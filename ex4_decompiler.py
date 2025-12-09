@@ -11,20 +11,32 @@ from datetime import datetime
 class EX4Decompiler:
     def __init__(self):
         self.known_functions = {
-            b'\x4D\x41\x5F': 'MovingAverage',
-            b'\x52\x53\x49': 'RSI',
-            b'\x42\x42\x5F': 'BollingerBands',
-            b'\x4D\x41\x43\x44': 'MACD',
-            b'\x69\x4D\x41': 'iMA',
-            b'\x69\x52\x53\x49': 'iRSI',
-            b'\x69\x42\x42': 'iBands',
-            b'\x4F\x72\x64': 'OrderSend'
+            # Indicators
+            b'iMA': 'iMA (Moving Average)',
+            b'iRSI': 'iRSI (Relative Strength Index)',
+            b'iMACD': 'iMACD (MACD)',
+            b'iBands': 'iBands (Bollinger Bands)',
+            b'iATR': 'iATR (Average True Range)',
+            b'iStochastic': 'iStochastic',
+            b'iCCI': 'iCCI (Commodity Channel Index)',
+            b'iADX': 'iADX (Average Directional Index)',
+            
+            # Trading functions
+            b'OrderSend': 'OrderSend (Place order)',
+            b'OrderClose': 'OrderClose',
+            b'OrderModify': 'OrderModify',
+            b'OrderDelete': 'OrderDelete',
+            
+            # Buffer functions
+            b'SetIndexBuffer': 'SetIndexBuffer',
+            b'SetIndexStyle': 'SetIndexStyle',
+            b'SetIndexLabel': 'SetIndexLabel',
         }
         
         self.mt4_structures = {
-            b'\x69\x6E\x64\x69\x63\x61\x74\x6F\x72': 'INDICATOR_STRUCT',
-            b'\x65\x78\x70\x65\x72\x74': 'EXPERT_STRUCT',
-            b'\x73\x63\x72\x69\x70\x74': 'SCRIPT_STRUCT'
+            b'indicator': 'INDICATOR_STRUCT',
+            b'expert': 'EXPERT_STRUCT',
+            b'script': 'SCRIPT_STRUCT'
         }
 
     def read_file(self, filepath):
@@ -35,25 +47,48 @@ class EX4Decompiler:
             return f"Error reading file: {str(e)}"
 
     def extract_metadata(self, data):
+        """Enhanced metadata extraction"""
         metadata = {
             "type": "Unknown",
             "version": "Unknown",
             "functions": [],
             "indicators": [],
-            "strings": []
+            "strings": [],
+            "creation_date": "Unknown",
+            "file_size": len(data)
         }
 
-        # Determine type
-        for marker, type_name in self.mt4_structures.items():
-            if marker in data:
-                metadata["type"] = type_name
+        # Determine type with better pattern matching
+        if b'indicator' in data.lower():
+            metadata["type"] = "INDICATOR"
+        elif b'expert' in data.lower() or b'EA' in data:
+            metadata["type"] = "EXPERT ADVISOR"
+        elif b'script' in data.lower():
+            metadata["type"] = "SCRIPT"
+
+        # Extract version info with multiple patterns
+        version_patterns = [
+            re.compile(b'version\\s*[\\d\\.]+', re.IGNORECASE),
+            re.compile(b'v[\\s]*(\\d+\\.\\d+)', re.IGNORECASE),
+        ]
+        for pattern in version_patterns:
+            version_match = pattern.search(data)
+            if version_match:
+                metadata["version"] = version_match.group().decode('ascii', errors='ignore')
                 break
 
-        # Extract version info
-        version_pattern = re.compile(b'version\\s*[\\d\\.]+', re.IGNORECASE)
-        version_match = version_pattern.search(data)
-        if version_match:
-            metadata["version"] = version_match.group().decode('ascii', errors='ignore')
+        # Extract creation date from PE header
+        if data.startswith(b'MZ') and len(data) > 0x3C:
+            try:
+                pe_offset = struct.unpack('<I', data[0x3C:0x40])[0]
+                if pe_offset < len(data) - 8 and data[pe_offset:pe_offset+4] == b'PE\x00\x00':
+                    timestamp = struct.unpack('<I', data[pe_offset+8:pe_offset+12])[0]
+                    if timestamp > 0:
+                        from datetime import datetime
+                        creation_time = datetime.fromtimestamp(timestamp)
+                        metadata["creation_date"] = creation_time.strftime('%Y-%m-%d %H:%M:%S')
+            except:
+                pass
 
         # Extract function calls
         for func_sig, func_name in self.known_functions.items():
@@ -80,44 +115,74 @@ class EX4Decompiler:
         return params
 
     def generate_pseudocode(self, data, metadata):
+        """Enhanced pseudocode generation with better formatting"""
         pseudo = []
         
-        # Generate header
-        pseudo.append(f"// {metadata['type']} Implementation")
-        pseudo.append(f"// Version: {metadata['version']}")
+        # Generate header with metadata
+        pseudo.append("//+------------------------------------------------------------------+")
+        pseudo.append(f"//| Decompiled {metadata['type']}")
+        pseudo.append(f"//| Version: {metadata['version']}")
+        if metadata.get('creation_date', 'Unknown') != 'Unknown':
+            pseudo.append(f"//| Created: {metadata['creation_date']}")
+        pseudo.append("//+------------------------------------------------------------------+")
         pseudo.append("")
 
         # Generate parameters section if it's an indicator
-        if metadata['type'] == 'INDICATOR_STRUCT':
+        if 'INDICATOR' in metadata['type']:
             params = self.extract_indicator_parameters(data)
             if params:
-                pseudo.append("// Input Parameters")
+                pseudo.append("// Input Parameters (detected)")
                 for param in params:
-                    pseudo.append(f"extern int {param} = 0;")
+                    pseudo.append(f"extern int {param} = 14;  // Default value")
                 pseudo.append("")
 
-        # Generate function declarations
+        # Generate function declarations with descriptions
         if metadata['functions']:
-            pseudo.append("// Function Calls Detected")
+            pseudo.append("// Detected Functions:")
             for func in metadata['functions']:
-                pseudo.append(f"// Uses {func}()")
+                pseudo.append(f"//   - {func}")
             pseudo.append("")
 
-        # Try to reconstruct main logic
+        # Try to reconstruct main logic with better structure
+        pseudo.append("//+------------------------------------------------------------------+")
+        pseudo.append("//| Initialization function")
+        pseudo.append("//+------------------------------------------------------------------+")
+        pseudo.append("int init()")
+        pseudo.append("{")
+        if 'INDICATOR' in metadata['type']:
+            pseudo.append("    // Setup indicator buffers")
+            pseudo.append("    SetIndexBuffer(0, Buffer[]);")
+            pseudo.append("    SetIndexStyle(0, DRAW_LINE);")
+        pseudo.append("    return(0);")
+        pseudo.append("}")
+        pseudo.append("")
+        
+        pseudo.append("//+------------------------------------------------------------------+")
+        pseudo.append("//| Main execution function")
+        pseudo.append("//+------------------------------------------------------------------+")
         pseudo.append("int start()")
         pseudo.append("{")
         
-        # Add detected function calls
+        # Add detected function calls with better context
         for func in metadata['functions']:
-            if 'MA' in func:
-                pseudo.append(f"    double ma = {func}(/* parameters */);")
-            elif 'RSI' in func:
-                pseudo.append(f"    double rsi = {func}(/* parameters */);")
-            elif 'BB' in func:
-                pseudo.append(f"    double bands = {func}(/* parameters */);")
-            elif 'Order' in func:
-                pseudo.append(f"    // Trading function: {func}")
-                pseudo.append(f"    {func}(/* trading parameters */);")
+            if 'iMA' in func:
+                pseudo.append("    // Calculate Moving Average (detected)")
+                pseudo.append("    double ma = iMA(Symbol(), Period(), 14, 0, MODE_SMA, PRICE_CLOSE, 0);")
+            elif 'iRSI' in func:
+                pseudo.append("    // Calculate RSI (detected)")
+                pseudo.append("    double rsi = iRSI(Symbol(), Period(), 14, PRICE_CLOSE, 0);")
+            elif 'iMACD' in func:
+                pseudo.append("    // Calculate MACD (detected)")
+                pseudo.append("    double macd = iMACD(Symbol(), Period(), 12, 26, 9, PRICE_CLOSE, MODE_MAIN, 0);")
+            elif 'iBands' in func:
+                pseudo.append("    // Calculate Bollinger Bands (detected)")
+                pseudo.append("    double upper = iBands(Symbol(), Period(), 20, 2, 0, PRICE_CLOSE, MODE_UPPER, 0);")
+                pseudo.append("    double lower = iBands(Symbol(), Period(), 20, 2, 0, PRICE_CLOSE, MODE_LOWER, 0);")
+            elif 'OrderSend' in func:
+                pseudo.append("    // Trading logic (detected)")
+                pseudo.append("    if(OrdersTotal() < 1) {")
+                pseudo.append("        int ticket = OrderSend(Symbol(), OP_BUY, 0.1, Ask, 3, 0, 0, \"Trade\");")
+                pseudo.append("    }")
 
         pseudo.append("    return(0);")
         pseudo.append("}")

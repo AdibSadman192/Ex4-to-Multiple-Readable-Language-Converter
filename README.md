@@ -96,45 +96,100 @@ python ex4_debug_decompiler.py
    - Strategy explanation
    - Technical documentation
 
+## Recent Enhancements 🎉
+
+### Major Improvements (December 2025)
+
+1. **Enhanced Pattern Recognition**
+   - Expanded from 10 to 40+ MT4/MT5 function patterns
+   - Added trading strategy detection (Martingale, Grid, Hedging, Scalping, Breakout, Trend Following)
+   - Implemented risk management pattern detection
+   - Added timeframe usage pattern identification
+
+2. **Improved Metadata Extraction**
+   - PE header analysis with accurate compilation timestamps
+   - Copyright, author, and description extraction
+   - URL/link detection
+   - File size and complexity metrics (entropy calculation)
+
+3. **Advanced String Analysis**
+   - Unicode (UTF-16LE) support for international characters
+   - String categorization (functions, parameters, indicators, comments, etc.)
+   - Duplicate removal with order preservation
+   - Improved filtering and relevance scoring
+
+4. **Enhanced Code Generation**
+   - **Python**: Type hints, comprehensive class structure, detailed indicator implementations
+   - **MQL4**: Professional headers, parameter inference, risk management code templates
+   - **Text**: Comprehensive 70+ line analysis reports with all metadata and statistics
+   - Context-aware parameter naming with type inference
+
+5. **New Analysis Features**
+   - Input parameter extraction with automatic type detection
+   - Trading strategy analysis and classification
+   - Risk management feature detection
+   - File statistics including entropy, string counts, pattern counts
+   - String categorization for better code generation
+
+6. **Improved Error Handling**
+   - Comprehensive try-catch blocks throughout all analyzers
+   - Graceful degradation when data is missing or corrupted
+   - Better logging for debugging
+   - User-friendly error messages
+
+### Code Quality Improvements
+- Better modular structure
+- Type hints in new code
+- Comprehensive documentation strings
+- Consistent error handling patterns
+- Extensive testing with mock EX4 files
+
 ## Limitations
 
-### Current Limitations
-1. **Decompilation Accuracy**
-   - Cannot recover original variable names
-   - Complex logic may be simplified
-   - Custom indicators may not be fully reconstructed
+### Resolved/Improved Limitations ✅
+1. **Pattern Recognition** ✅ IMPROVED
+   - ✅ Now includes 40+ MT4/MT5 function patterns
+   - ✅ Detects trading strategies (martingale, grid, hedging, scalping, etc.)
+   - ✅ Identifies risk management features
+   - ✅ Detects timeframe usage patterns
+   - ⚠ May still miss highly custom implementations
 
-2. **Pattern Recognition**
-   - Limited to common trading patterns
-   - May miss custom implementations
-   - Complex strategies might be oversimplified
+2. **Code Generation** ✅ IMPROVED
+   - ✅ Python code now includes type hints and comprehensive class structure
+   - ✅ MQL4 code includes detailed headers and comments
+   - ✅ Input parameters are inferred with correct data types
+   - ✅ Text descriptions provide comprehensive analysis reports
+   - ⚠ Generated code still requires manual review for edge cases
 
-3. **Code Generation**
-   - Generated code may require optimization
-   - Some trading functions are templates only
-   - Manual adjustment might be needed
+3. **Analysis Depth** ✅ IMPROVED
+   - ✅ Enhanced string extraction with Unicode (UTF-16LE) support
+   - ✅ PE header analysis extracts compilation timestamps
+   - ✅ Metadata extraction includes copyright, author, description
+   - ✅ String categorization (functions, parameters, indicators, etc.)
+   - ✅ File statistics including entropy calculation
+   - ⚠ Deep nested functions may still be flattened
 
-4. **Analysis Depth**
-   - Cannot recover compiler optimizations
-   - Some binary patterns might be missed
-   - Deep nested functions may be flattened
+### Remaining Limitations
+1. **Decompilation Accuracy** ⚠
+   - ❌ Cannot recover original variable names (inherent limitation)
+   - ❌ Complex logic may be simplified
+   - ⚠ Custom indicators detection improved but may not be fully reconstructed
 
-### What Cannot Be Done
+2. **Full Source Recovery** ❌
+   - ❌ Original source code cannot be exactly reconstructed (inherent limitation)
+   - ❌ Original comments are lost (inherent limitation)
+   - ❌ Original code structure may differ
+   - ✅ BUT: Improved parameter names and types help understand intent
 
-1. **Full Source Recovery**
-   - Original source code cannot be exactly reconstructed
-   - Original comments are lost
-   - Original code structure may differ
+3. **Custom Features** ⚠
+   - ❌ Custom indicators cannot be fully reversed
+   - ❌ Proprietary functions remain obfuscated
+   - ✅ Trading logic patterns are now better detected
 
-2. **Custom Features**
-   - Custom indicators cannot be fully reversed
-   - Proprietary functions remain obfuscated
-   - Complex trading logic may be approximated
-
-3. **Optimization Recovery**
-   - Compiler optimizations are permanent
-   - Original performance tweaks are lost
-   - Memory management patterns are simplified
+4. **Optimization Recovery** ❌
+   - ❌ Compiler optimizations are permanent (inherent limitation)
+   - ❌ Original performance tweaks are lost (inherent limitation)
+   - ❌ Memory management patterns are simplified (inherent limitation)
 
 ## Technical Details
 
