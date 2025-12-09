@@ -12,18 +12,8 @@ A powerful tool for analyzing and converting MetaTrader 4 (MT4) EX4 files into v
 ## Installation
 
 ### Prerequisites
-- Python 3.7 or higher
-- Required Python packages:
-```
-pip install -r requirements.txt
-```
-
-The requirements.txt includes:
-- PyQt5
-- pandas
-- numpy
-- capstone (for disassembly)
-- networkx (for control flow analysis)
+- Python 3.12 or higher (Python 3.8+ supported)
+- Required Python packages (see requirements.txt)
 
 ### Setup
 1. Clone or download this repository
@@ -31,7 +21,15 @@ The requirements.txt includes:
 ```bash
 pip install -r requirements.txt
 ```
-3. Run the decompiler:
+
+The requirements.txt includes:
+- PyQt5 (5.15.11) - GUI framework
+- pandas (2.3.3+) - Data analysis
+- numpy (1.26.4+) - Numerical computing
+- capstone (5.0.6) - Disassembly engine
+- networkx (3.6.1) - Control flow analysis
+
+3. Run the main decompiler:
 ```bash
 python ex4_debug_decompiler.py
 ```

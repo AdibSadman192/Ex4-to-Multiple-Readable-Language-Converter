@@ -657,69 +657,219 @@ class MT4Analyzer:
 class DebugDecompilerGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Multi-Language Trading Code Converter")
-        self.root.geometry("1200x800")
+        self.root.title("EX4 Multi-Language Trading Code Converter")
+        self.root.geometry("1280x850")
+        self.root.minsize(1024, 700)
         
         self.analyzer = MT4Analyzer()
+        self.setup_styles()
         self.setup_gui()
         
+    def setup_styles(self):
+        """Configure modern ttk styles"""
+        style = ttk.Style()
+        
+        # Configure colors - Modern blue theme
+        bg_color = '#f0f0f0'
+        accent_color = '#0078d4'
+        hover_color = '#106ebe'
+        
+        # Configure button style
+        style.configure('Modern.TButton',
+                       padding=(15, 8),
+                       relief='flat',
+                       borderwidth=0,
+                       font=('Segoe UI', 10))
+        
+        # Configure label style
+        style.configure('Title.TLabel',
+                       font=('Segoe UI', 16, 'bold'),
+                       padding=10)
+        
+        style.configure('Subtitle.TLabel',
+                       font=('Segoe UI', 10),
+                       foreground='#666666',
+                       padding=(5, 2))
+        
+        style.configure('Status.TLabel',
+                       font=('Segoe UI', 9),
+                       padding=(10, 5),
+                       background='#e8e8e8')
+        
+        # Configure frame styles
+        style.configure('Header.TFrame',
+                       background='white',
+                       relief='flat')
+        
+        style.configure('Control.TFrame',
+                       background='#f8f8f8',
+                       padding=10,
+                       relief='solid',
+                       borderwidth=1)
+        
     def setup_gui(self):
-        # Main frame
-        main_frame = ttk.Frame(self.root, padding="10")
+        # Configure grid weights for responsiveness
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        
+        # Main container
+        main_frame = ttk.Frame(self.root, padding="0")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.rowconfigure(1, weight=1)
         
-        # File selection and controls
-        control_frame = ttk.Frame(main_frame)
-        control_frame.grid(row=0, column=0, pady=5, sticky=(tk.W, tk.E))
+        # Header section
+        header_frame = ttk.Frame(main_frame, style='Header.TFrame')
+        header_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=0, pady=0)
         
-        # Add language selection
-        ttk.Label(control_frame, text="Language:").pack(side=tk.LEFT, padx=5)
+        title_label = ttk.Label(header_frame, 
+                               text="EX4 Multi-Language Converter",
+                               style='Title.TLabel')
+        title_label.pack(pady=(15, 5))
+        
+        subtitle_label = ttk.Label(header_frame,
+                                   text="Convert MetaTrader 4 EX4 files to MQL4, MQL5, Python, C, R, or readable text",
+                                   style='Subtitle.TLabel')
+        subtitle_label.pack(pady=(0, 15))
+        
+        # Control panel
+        control_frame = ttk.Frame(main_frame, style='Control.TFrame')
+        control_frame.grid(row=1, column=0, pady=(10, 5), padx=15, sticky=(tk.W, tk.E))
+        
+        # Language selection with label
+        lang_container = ttk.Frame(control_frame)
+        lang_container.pack(side=tk.LEFT, padx=(0, 15))
+        
+        ttk.Label(lang_container, text="Target Language:", 
+                 font=('Segoe UI', 10, 'bold')).pack(side=tk.LEFT, padx=(0, 8))
+        
         self.language_var = tk.StringVar(value="MQL4")
-        language_combo = ttk.Combobox(control_frame, textvariable=self.language_var, 
-                                    values=["MQL4", "MQL5", "Python", "C", "R", "Text"], 
-                                    state="readonly")
-        language_combo.pack(side=tk.LEFT, padx=5)
+        language_combo = ttk.Combobox(lang_container, 
+                                     textvariable=self.language_var, 
+                                     values=["MQL4", "MQL5", "Python", "C", "R", "Text"], 
+                                     state="readonly",
+                                     width=12,
+                                     font=('Segoe UI', 10))
+        language_combo.pack(side=tk.LEFT)
+        language_combo.bind('<<ComboboxSelected>>', self.on_language_change)
         
-        ttk.Button(control_frame, text="Select EX4 File", command=self.select_file).pack(side=tk.LEFT, padx=5)
-        ttk.Button(control_frame, text="Save Analysis", command=self.save_analysis).pack(side=tk.LEFT, padx=5)
-        ttk.Button(control_frame, text="Save Pseudocode", command=self.save_pseudocode).pack(side=tk.LEFT, padx=5)
+        # Buttons with modern styling
+        btn_container = ttk.Frame(control_frame)
+        btn_container.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        self.open_btn = ttk.Button(btn_container, 
+                                   text="Select EX4 File", 
+                                   command=self.select_file,
+                                   style='Modern.TButton')
+        self.open_btn.pack(side=tk.LEFT, padx=5)
+        
+        self.save_analysis_btn = ttk.Button(btn_container, 
+                                           text="Save Analysis", 
+                                           command=self.save_analysis,
+                                           style='Modern.TButton')
+        self.save_analysis_btn.pack(side=tk.LEFT, padx=5)
+        self.save_analysis_btn.state(['disabled'])
+        
+        self.save_code_btn = ttk.Button(btn_container, 
+                                       text="Save Code", 
+                                       command=self.save_pseudocode,
+                                       style='Modern.TButton')
+        self.save_code_btn.pack(side=tk.LEFT, padx=5)
+        self.save_code_btn.state(['disabled'])
 
-        # Create notebook for tabs
-        self.notebook = ttk.Notebook(main_frame)
-        self.notebook.grid(row=1, column=0, pady=5, sticky=(tk.W, tk.E, tk.N, tk.S))
+        # Content area with notebook
+        content_frame = ttk.Frame(main_frame)
+        content_frame.grid(row=2, column=0, pady=(5, 0), padx=15, sticky=(tk.W, tk.E, tk.N, tk.S))
+        content_frame.columnconfigure(0, weight=1)
+        content_frame.rowconfigure(0, weight=1)
         
-        # Analysis tab
-        self.analysis_frame = ttk.Frame(self.notebook)
+        self.notebook = ttk.Notebook(content_frame)
+        self.notebook.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Analysis tab with better formatting
+        self.analysis_frame = ttk.Frame(self.notebook, padding=10)
         self.notebook.add(self.analysis_frame, text="Analysis")
         
-        self.analysis_text = scrolledtext.ScrolledText(self.analysis_frame, width=100, height=40)
+        self.analysis_text = scrolledtext.ScrolledText(
+            self.analysis_frame, 
+            width=100, 
+            height=35,
+            font=('Consolas', 10),
+            wrap=tk.WORD,
+            background='#ffffff',
+            padx=10,
+            pady=10
+        )
         self.analysis_text.pack(expand=True, fill='both')
         
         # Pseudocode tab
-        self.pseudo_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.pseudo_frame, text="Pseudocode")
+        self.pseudo_frame = ttk.Frame(self.notebook, padding=10)
+        self.notebook.add(self.pseudo_frame, text="Generated Code")
         
-        self.pseudo_text = scrolledtext.ScrolledText(self.pseudo_frame, width=100, height=40)
+        self.pseudo_text = scrolledtext.ScrolledText(
+            self.pseudo_frame, 
+            width=100, 
+            height=35,
+            font=('Consolas', 10),
+            wrap=tk.NONE,
+            background='#ffffff',
+            padx=10,
+            pady=10
+        )
         self.pseudo_text.pack(expand=True, fill='both')
         
         # Debug log tab
-        self.debug_frame = ttk.Frame(self.notebook)
+        self.debug_frame = ttk.Frame(self.notebook, padding=10)
         self.notebook.add(self.debug_frame, text="Debug Log")
         
-        self.debug_text = scrolledtext.ScrolledText(self.debug_frame, width=100, height=40)
+        self.debug_text = scrolledtext.ScrolledText(
+            self.debug_frame, 
+            width=100, 
+            height=35,
+            font=('Consolas', 9),
+            wrap=tk.WORD,
+            background='#1e1e1e',
+            foreground='#d4d4d4',
+            padx=10,
+            pady=10
+        )
         self.debug_text.pack(expand=True, fill='both')
         
-        # Status bar
+        # Status bar with modern styling
+        status_frame = ttk.Frame(main_frame, style='Status.TLabel')
+        status_frame.grid(row=3, column=0, sticky=(tk.W, tk.E), padx=0, pady=0)
+        
         self.status_var = tk.StringVar()
-        self.status_var.set("Ready")
-        status_bar = ttk.Label(main_frame, textvariable=self.status_var)
-        status_bar.grid(row=2, column=0, pady=5)
+        self.status_var.set("Ready - Select an EX4 file to begin")
+        
+        status_bar = ttk.Label(status_frame, 
+                              textvariable=self.status_var,
+                              style='Status.TLabel')
+        status_bar.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
         self.current_analysis = None
         self.current_pseudocode = None
         
         # Configure logging to GUI
         self.setup_logging()
+        
+    def on_language_change(self, event=None):
+        """Handle language selection change"""
+        if self.current_analysis:
+            self.status_var.set(f"⏳ Regenerating code in {self.language_var.get()}...")
+            self.root.update()
+            
+            try:
+                self.current_pseudocode = self.analyzer.generate_pseudocode(
+                    self.current_analysis, 
+                    self.language_var.get()
+                )
+                self.pseudo_text.delete(1.0, tk.END)
+                self.pseudo_text.insert(tk.END, self.current_pseudocode)
+                self.status_var.set(f"✓ Code regenerated in {self.language_var.get()}")
+            except Exception as e:
+                logging.error(f"Error regenerating code: {str(e)}", exc_info=True)
+                self.status_var.set(f"✗ Error regenerating code: {str(e)}")
 
     def setup_logging(self):
         class TextHandler(logging.Handler):
@@ -744,7 +894,7 @@ class DebugDecompilerGUI:
             self.analyze_file(filepath)
             
     def analyze_file(self, filepath):
-        self.status_var.set(f"Analyzing {os.path.basename(filepath)}...")
+        self.status_var.set(f"⏳ Analyzing {os.path.basename(filepath)}...")
         self.root.update()
         
         try:
@@ -768,16 +918,20 @@ class DebugDecompilerGUI:
             self.analysis_text.insert(tk.END, json.dumps(analysis, indent=2))
             self.pseudo_text.insert(tk.END, self.current_pseudocode)
             
-            self.status_var.set("Analysis complete")
+            # Enable save buttons
+            self.save_analysis_btn.state(['!disabled'])
+            self.save_code_btn.state(['!disabled'])
+            
+            self.status_var.set(f"✓ Analysis complete - {os.path.basename(filepath)}")
             
         except Exception as e:
             error_msg = f"Error during analysis: {str(e)}"
             logging.error(error_msg, exc_info=True)
-            self.status_var.set(error_msg)
+            self.status_var.set(f"✗ {error_msg}")
 
     def save_pseudocode(self):
         if not self.current_pseudocode:
-            self.status_var.set("No pseudocode to save")
+            self.status_var.set("⚠ No code to save")
             return
             
         # Define file extensions for each language
@@ -806,6 +960,7 @@ class DebugDecompilerGUI:
         ]
         
         filepath = filedialog.asksaveasfilename(
+            title=f"Save {current_lang} Code",
             defaultextension=extension,
             filetypes=filetypes
         )
@@ -814,18 +969,19 @@ class DebugDecompilerGUI:
             try:
                 with open(filepath, 'w') as f:
                     f.write(self.current_pseudocode)
-                self.status_var.set(f"Pseudocode saved to {filepath}")
+                self.status_var.set(f"✓ Code saved to {os.path.basename(filepath)}")
             except Exception as e:
                 error_msg = f"Error saving file: {str(e)}"
                 logging.error(error_msg, exc_info=True)
-                self.status_var.set(error_msg)
+                self.status_var.set(f"✗ {error_msg}")
                 
     def save_analysis(self):
         if not self.current_analysis:
-            self.status_var.set("No analysis to save")
+            self.status_var.set("⚠ No analysis to save")
             return
             
         filepath = filedialog.asksaveasfilename(
+            title="Save Analysis as JSON",
             defaultextension=".json",
             filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
         )
@@ -833,11 +989,11 @@ class DebugDecompilerGUI:
             try:
                 with open(filepath, 'w') as f:
                     json.dump(self.current_analysis, f, indent=2)
-                self.status_var.set(f"Analysis saved to {filepath}")
+                self.status_var.set(f"✓ Analysis saved to {os.path.basename(filepath)}")
             except Exception as e:
                 error_msg = f"Error saving analysis: {str(e)}"
                 logging.error(error_msg)
-                self.status_var.set(error_msg)
+                self.status_var.set(f"✗ {error_msg}")
 
 def main():
     root = tk.Tk()
