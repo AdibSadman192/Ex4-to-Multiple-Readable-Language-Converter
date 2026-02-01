@@ -570,6 +570,9 @@ class MT4Analyzer:
     def generate_pseudocode(self, analysis, language='MQL4'):
         """Generate pseudocode in the specified language format"""
         try:
+            # Normalize language to title case for consistency
+            language = language.upper() if language.upper() in ['MQL4', 'MQL5', 'C', 'R'] else language.title()
+            
             generators = {
                 'MQL4': self.generate_mql4_code,
                 'MQL5': self.generate_mql5_code,
