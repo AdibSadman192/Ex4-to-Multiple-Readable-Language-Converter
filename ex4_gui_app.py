@@ -230,7 +230,10 @@ class EX4AnalysisEngine:
             # Build number at offset 0x06
             build = struct.unpack('<H', data[6:8])[0]
             meta['build'] = str(build)
-            # Type from byte at 0x40: 0x07 = Indicator, 0x66 = Expert Advisor
+            # Type detection from byte at 0x40.
+            # Low bits 0x07 indicate an indicator; value 0x66 indicates
+            # an Expert Advisor.  Different masks are used because the
+            # two type codes occupy different bit positions.
             type_byte = data[0x40] if len(data) > 0x40 else 0
             if type_byte == 0x07 or (type_byte & 0x07) == 0x07:
                 meta['type'] = 'Indicator'
@@ -446,13 +449,24 @@ class EX4AnalysisEngine:
         ind_kw_long = ['MACD', 'Bollinger', 'Stochastic', 'Ichimoku',
                        'Channel', 'Fibo', 'LinReg', 'Fractal']
         ind_kw_short = ['MA', 'RSI', 'ATR', 'CCI', 'ADX', 'SAR', 'Band']
+        # Pre-compile regex patterns for performance
+        func_short_pats = [re.compile(r'\b' + re.escape(kw) + r'\b')
+                           for kw in func_short]
+        ind_short_pats = [re.compile(r'\b' + re.escape(kw) + r'\b')
+                          for kw in ind_kw_short]
+        re_dotted = re.compile(r'^[A-Za-z]\w+\.[A-Za-z]\w+$')
+        re_camel = re.compile(r'^[a-z][a-zA-Z0-9]+$')
+        re_pascal = re.compile(r'^[A-Z][a-zA-Z0-9]+$')
         for s in strings:
             sl = s.lower()
             stripped = s.strip()
             placed = False
-            # Skip noise: strings that are mostly non-alphanumeric
+            # Skip empty or noise strings (mostly non-alphanumeric)
+            if not stripped:
+                cats['other'].append(s)
+                continue
             alpha_count = sum(1 for c in stripped if c.isalpha())
-            if len(stripped) > 0 and alpha_count / len(stripped) < 0.5:
+            if alpha_count / len(stripped) < 0.5:
                 cats['other'].append(s)
                 continue
             # Skip very short strings
@@ -469,26 +483,26 @@ class EX4AnalysisEngine:
                     placed = True
                     break
             if not placed:
-                for kw in func_short:
-                    if re.search(r'\b' + re.escape(kw) + r'\b', stripped):
+                for pat in func_short_pats:
+                    if pat.search(stripped):
                         cats['functions'].append(s)
                         placed = True
                         break
             if placed:
                 continue
             # Detect dotted names like Show.MidLine, Sound.Alert
-            if re.match(r'^[A-Za-z]\w+\.[A-Za-z]\w+$', stripped):
+            if re_dotted.match(stripped):
                 cats['parameters'].append(s)
                 continue
             # Detect camelCase variable names (require uppercase after
             # lowercase start and min 5 chars to filter noise)
-            if (re.match(r'^[a-z][a-zA-Z0-9]+$', stripped)
+            if (re_camel.match(stripped)
                     and len(stripped) >= 5
                     and any(c.isupper() for c in stripped[1:])):
                 cats['variables'].append(s)
                 continue
             # Detect PascalCase names (min 5 chars with mixed case)
-            if (re.match(r'^[A-Z][a-zA-Z0-9]+$', stripped)
+            if (re_pascal.match(stripped)
                     and len(stripped) >= 5
                     and any(c.islower() for c in stripped)):
                 cats['variables'].append(s)
@@ -506,8 +520,8 @@ class EX4AnalysisEngine:
                     placed = True
                     break
             if not placed:
-                for kw in ind_kw_short:
-                    if re.search(r'\b' + re.escape(kw) + r'\b', stripped):
+                for pat in ind_short_pats:
+                    if pat.search(stripped):
                         cats['indicators'].append(s)
                         placed = True
                         break
@@ -515,7 +529,7 @@ class EX4AnalysisEngine:
                 continue
             if len(s) == 6 and s.isalpha() and s.isupper():
                 cats['symbols'].append(s)
-            elif s.strip().startswith('//') or s.strip().startswith('#'):
+            elif stripped.startswith('//') or stripped.startswith('#'):
                 cats['comments'].append(s)
             else:
                 cats['other'].append(s)
