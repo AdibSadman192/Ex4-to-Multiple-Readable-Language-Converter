@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-EX4 Reverse Engineering Studio
+EX4 Converter Studio
 A comprehensive GUI application for decompiling MetaTrader 4 EX4 binary files
 into multiple readable programming languages.
 
@@ -211,38 +211,105 @@ class EX4AnalysisEngine:
             'creation_date': 'Unknown', 'file_size': len(data),
             'copyright': 'Unknown', 'description': 'Unknown',
             'author': 'Unknown', 'link': 'Unknown',
+            'format': 'Unknown', 'build': 'Unknown',
         }
-        dl = data.lower()
-        if b'expert' in dl or b'EA' in data:
-            meta['type'] = 'Expert Advisor'
-        elif b'script' in dl:
-            meta['type'] = 'Script'
-        elif b'library' in dl:
-            meta['type'] = 'Library'
-        elif b'indicator' in dl:
+
+        # Detect EX4 format
+        if data[:4] == b'EX4\x00':
+            meta['format'] = 'EX4 Legacy (Build <600)'
             meta['type'] = 'Indicator'
+            # Copyright at offset 0x0C, 64 bytes ASCII
+            copyright_raw = data[12:76]
+            copyright_str = copyright_raw.split(b'\x00')[0].decode('latin-1', errors='ignore').strip()
+            if copyright_str:
+                meta['copyright'] = copyright_str
+        elif data[:2] == b'EX' and len(data) > 0x2B0:
+            fmt_byte = data[2]
+            sub_byte = data[3]  # format sub-version
+            meta['format'] = f'EX4 Build 600+ (0x{fmt_byte:02x}.{sub_byte:02x})'
+            # Build number at offset 0x06
+            build = struct.unpack('<H', data[6:8])[0]
+            meta['build'] = str(build)
+            # Type from byte at 0x40: 0x07 = Indicator, 0x66 = Expert Advisor
+            type_byte = data[0x40] if len(data) > 0x40 else 0
+            if type_byte == 0x07 or (type_byte & 0x07) == 0x07:
+                meta['type'] = 'Indicator'
+            elif type_byte == 0x66 or (type_byte & 0x0F) == 0x06:
+                meta['type'] = 'Expert Advisor'
+            else:
+                meta['type'] = 'Indicator'
+            # Copyright from UTF-16LE at offset 0xA8 (256 bytes)
+            try:
+                copyright_raw = data[0xA8:0x1A8]
+                copyright_str = copyright_raw.decode('utf-16-le', errors='ignore').split('\x00')[0].strip()
+                if copyright_str and len(copyright_str) >= 3:
+                    meta['copyright'] = copyright_str
+            except Exception:
+                pass
+            # Link from UTF-16LE at offset 0x1A8 (256 bytes)
+            try:
+                link_raw = data[0x1A8:0x2A8]
+                link_str = link_raw.decode('utf-16-le', errors='ignore').split('\x00')[0].strip()
+                if link_str and len(link_str) >= 3:
+                    meta['link'] = link_str
+            except Exception:
+                pass
+            # Version from UTF-16LE at offset 0x2A8
+            try:
+                ver_raw = data[0x2A8:0x2C8]
+                ver_str = ver_raw.decode('utf-16-le', errors='ignore').split('\x00')[0].strip()
+                if ver_str and len(ver_str) >= 1:
+                    meta['version'] = ver_str
+            except Exception:
+                pass
 
-        for pat in [
-            rb'version[\s=:]+([\d]+\.[\d]+(?:\.[\d]+)?)',
-            rb'v[\s]*([\d]+\.[\d]+(?:\.[\d]+)?)',
-        ]:
-            m = re.search(pat, data, re.IGNORECASE)
+        # Fallback: try to detect type from raw bytes if still unknown
+        if meta['type'] == 'Unknown':
+            dl = data.lower()
+            if b'expert' in dl or b'EA' in data:
+                meta['type'] = 'Expert Advisor'
+            elif b'script' in dl:
+                meta['type'] = 'Script'
+            elif b'library' in dl:
+                meta['type'] = 'Library'
+            elif b'indicator' in dl:
+                meta['type'] = 'Indicator'
+
+        # Fallback version from raw bytes
+        if meta['version'] == 'Unknown':
+            for pat in [
+                rb'version[\s=:]+([\d]+\.[\d]+(?:\.[\d]+)?)',
+                rb'v[\s]*([\d]+\.[\d]+(?:\.[\d]+)?)',
+            ]:
+                m = re.search(pat, data, re.IGNORECASE)
+                if m:
+                    meta['version'] = m.group(1).decode('ascii', errors='ignore')
+                    break
+
+        # Fallback copyright/author/link from raw bytes
+        if meta['copyright'] == 'Unknown':
+            for field, regex in [
+                ('copyright', rb'copyright[\s]*[:(\s]*([^\x00]{3,50})'),
+                ('description', rb'description[\s]*[:(\s]*([^\x00]{3,100})'),
+                ('author', rb'author[\s]*[:(\s]*([^\x00]{3,50})'),
+            ]:
+                m = re.search(regex, data, re.IGNORECASE)
+                if m:
+                    meta[field] = m.group(1).decode('ascii', errors='ignore').strip()
+
+        if meta['link'] == 'Unknown':
+            m = re.search(rb'(https?://[^\x00\s]{3,100})', data)
             if m:
-                meta['version'] = m.group(1).decode('ascii', errors='ignore')
-                break
+                meta['link'] = m.group(1).decode('ascii', errors='ignore').strip()
 
-        for field, regex in [
-            ('copyright', rb'copyright[\s]*[:(\s]*([^\x00]{3,50})'),
-            ('description', rb'description[\s]*[:(\s]*([^\x00]{3,100})'),
-            ('author', rb'author[\s]*[:(\s]*([^\x00]{3,50})'),
-        ]:
-            m = re.search(regex, data, re.IGNORECASE)
+        # Extract author from copyright if present
+        if meta['author'] == 'Unknown' and meta['copyright'] != 'Unknown':
+            cr = meta['copyright']
+            m = re.search(r'(?:copyright|©|\(c\))\s*(?:\d{4}[,\s]*)?\s*(.*)', cr, re.IGNORECASE)
             if m:
-                meta[field] = m.group(1).decode('ascii', errors='ignore').strip()
-
-        m = re.search(rb'(https?://[^\x00\s]{3,100})', data)
-        if m:
-            meta['link'] = m.group(1).decode('ascii', errors='ignore').strip()
+                author = m.group(1).strip().rstrip('.')
+                if author:
+                    meta['author'] = author
 
         return meta
 
@@ -974,6 +1041,10 @@ class CodeGenerator:
         L.append(f"  Filename:      {a.get('filename', 'N/A')}")
         L.append(f"  Type:          {meta['type']}")
         L.append(f"  Version:       {meta['version']}")
+        if meta.get('format', 'Unknown') != 'Unknown':
+            L.append(f"  Format:        {meta['format']}")
+        if meta.get('build', 'Unknown') != 'Unknown':
+            L.append(f"  Build:         {meta['build']}")
         if meta.get('creation_date', 'Unknown') != 'Unknown':
             L.append(f"  Created:       {meta['creation_date']}")
         if meta.get('copyright', 'Unknown') != 'Unknown':
@@ -1073,19 +1144,20 @@ class CodeGenerator:
 # ---------------------------------------------------------------------------
 
 # Color palette
-DARK_BG = "#1a1a2e"
-DARK_SURFACE = "#16213e"
-DARK_CARD = "#0f3460"
-ACCENT = "#e94560"
-ACCENT_HOVER = "#ff6b81"
-TEXT_PRIMARY = "#eaeaea"
-TEXT_SECONDARY = "#a0a0b0"
+# Color palette: #FAF3E1, #F5E7C6, #FA8112, #222222
+DARK_BG = "#222222"
+DARK_SURFACE = "#2a2a2a"
+DARK_CARD = "#333333"
+ACCENT = "#FA8112"
+ACCENT_HOVER = "#fb9a3e"
+TEXT_PRIMARY = "#FAF3E1"
+TEXT_SECONDARY = "#F5E7C6"
 SUCCESS = "#2ed573"
 WARNING = "#ffa502"
-CODE_BG = "#0d1117"
-CODE_FG = "#c9d1d9"
-SIDEBAR_BG = "#0f1629"
-SIDEBAR_ACTIVE = "#1a2744"
+CODE_BG = "#1a1a1a"
+CODE_FG = "#FAF3E1"
+SIDEBAR_BG = "#1a1a1a"
+SIDEBAR_ACTIVE = "#333333"
 
 
 class SidebarButton(ctk.CTkButton):
@@ -1110,7 +1182,7 @@ class EX4StudioApp(ctk.CTk):
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
 
-        self.title("EX4 Reverse Engineering Studio")
+        self.title("EX4 Converter Studio")
         self.geometry(f"{self.WIDTH}x{self.HEIGHT}")
         self.minsize(1024, 680)
 
@@ -1187,7 +1259,7 @@ class EX4StudioApp(ctk.CTk):
         ctk.CTkLabel(logo_frame, text="EX4 Studio",
                      font=ctk.CTkFont(size=22, weight="bold"),
                      text_color=ACCENT).pack(pady=(8, 0))
-        ctk.CTkLabel(logo_frame, text="Reverse Engineering",
+        ctk.CTkLabel(logo_frame, text="File Converter",
                      font=ctk.CTkFont(size=11),
                      text_color=TEXT_SECONDARY).pack()
 
@@ -1342,7 +1414,7 @@ class EX4StudioApp(ctk.CTk):
     def _show_welcome(self):
         welcome = (
             "╔══════════════════════════════════════════════════════════════╗\n"
-            "║           EX4 REVERSE ENGINEERING STUDIO  v2.0             ║\n"
+            "║              EX4 CONVERTER STUDIO  v2.0                    ║\n"
             "╠══════════════════════════════════════════════════════════════╣\n"
             "║                                                            ║\n"
             "║  Features:                                                 ║\n"
@@ -1457,6 +1529,10 @@ class EX4StudioApp(ctk.CTk):
         lines.append(f"{'═' * 60}")
         lines.append("")
         lines.append(f"  Type:         {meta['type']}")
+        if meta.get('format', 'Unknown') != 'Unknown':
+            lines.append(f"  Format:       {meta['format']}")
+        if meta.get('build', 'Unknown') != 'Unknown':
+            lines.append(f"  Build:        {meta['build']}")
         lines.append(f"  Version:      {meta['version']}")
         lines.append(f"  Size:         {stats.get('file_size_kb', 0)} KB")
         lines.append(f"  Entropy:      {stats.get('entropy', 0)}")
@@ -1550,6 +1626,20 @@ class EX4StudioApp(ctk.CTk):
         funcs = dis.get('functions', [])
         if not funcs:
             self.disasm_text.insert("end", "[i] No function prologues detected\n")
+            self.disasm_text.insert("end", "\n  This is common for EX4 files compiled with Build 600+\n")
+            self.disasm_text.insert("end", "  which use encrypted/obfuscated bytecode.\n\n")
+            # Show raw hex bytes around potential code regions
+            if self.raw_data:
+                self.disasm_text.insert("end", "  Raw binary sections (first 512 bytes after header):\n")
+                self.disasm_text.insert("end", "  " + "─" * 48 + "\n")
+                # Skip past EX4 header (~0x300 bytes) to code region
+                start_offset = 0x300 if len(self.raw_data) > 0x300 else 0
+                end_offset = min(start_offset + 512, len(self.raw_data))
+                for offset in range(start_offset, end_offset, 16):
+                    chunk = self.raw_data[offset:offset + 16]
+                    hex_part = ' '.join(f'{b:02x}' for b in chunk)
+                    ascii_part = ''.join(chr(b) if 32 <= b <= 126 else '.' for b in chunk)
+                    self.disasm_text.insert("end", f"  {offset:08x}  {hex_part:<48s}  |{ascii_part}|\n")
             return
         for fn in funcs:
             self.disasm_text.insert(
@@ -1571,6 +1661,16 @@ class EX4StudioApp(ctk.CTk):
                            f"({len(items)})\n{'─' * 40}\n")
                 for s in items:
                     self.strings_text.insert("end", f"  {s}\n")
+
+        # If no categorized strings shown, show all raw strings
+        all_strings = a.get('strings', [])
+        if not any(items for items in cats.values()):
+            if all_strings:
+                self.strings_text.insert("end", f"\n{'─' * 40}\n  ALL STRINGS ({len(all_strings)})\n{'─' * 40}\n")
+                for s in all_strings[:200]:
+                    self.strings_text.insert("end", f"  {s}\n")
+            else:
+                self.strings_text.insert("end", "  No readable strings found in this file.\n")
 
     def _populate_hex(self, max_bytes: int = 4096):
         self.hex_text.delete("0.0", "end")
