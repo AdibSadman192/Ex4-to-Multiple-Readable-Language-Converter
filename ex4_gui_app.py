@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-EX4 Reverse Engineering Studio
+EX4 Studio
 A comprehensive GUI application for decompiling MetaTrader 4 EX4 binary files
 into multiple readable programming languages.
 
 Consolidates all analysis techniques: EX4 header parsing (v400/v500+),
 pattern recognition, x86 disassembly, PE header analysis, string extraction
 with quality filtering, trading strategy detection, filename analysis, and
-multi-language code generation (MQL4, MQL5, Python, C, R).
+multi-language code generation (MQL4, MQL5, Python, C, R, Text).
 """
 
 import os
@@ -750,7 +750,7 @@ class CodeGenerator:
         gen_map = {
             'MQL4': self._mql4, 'MQL5': self._mql5,
             'Python': self._python, 'C': self._c,
-            'R': self._r,
+            'R': self._r, 'Text': self._text,
         }
         fn = gen_map.get(language)
         if fn is None:
@@ -1503,7 +1503,7 @@ class EX4StudioApp(ctk.CTk):
         ctk.set_appearance_mode("light")
         ctk.set_default_color_theme("blue")
 
-        self.title("EX4 Reverse Engineering Studio")
+        self.title("EX4 Studio")
         self.geometry(f"{self.WIDTH}x{self.HEIGHT}")
         self.minsize(1024, 680)
 
@@ -1580,7 +1580,7 @@ class EX4StudioApp(ctk.CTk):
         ctk.CTkLabel(logo_frame, text="EX4 Studio",
                      font=ctk.CTkFont(size=22, weight="bold"),
                      text_color=ACCENT).pack(pady=(8, 0))
-        ctk.CTkLabel(logo_frame, text="Reverse Engineering",
+        ctk.CTkLabel(logo_frame, text="Binary Analyzer",
                      font=ctk.CTkFont(size=11),
                      text_color=TEXT_SECONDARY).pack()
 
@@ -1602,7 +1602,7 @@ class EX4StudioApp(ctk.CTk):
                      text_color=TEXT_SECONDARY).pack(padx=16, anchor="w")
         self.lang_var = ctk.StringVar(value="MQL4")
         self.lang_menu = ctk.CTkOptionMenu(
-            sidebar, values=["MQL4", "MQL5", "Python", "C", "R"],
+            sidebar, values=["MQL4", "MQL5", "Python", "C", "R", "Text"],
             variable=self.lang_var, command=self._on_language_change,
             fg_color=BG_PRIMARY, button_color=ACCENT,
             button_hover_color=ACCENT_HOVER, width=180)
@@ -1735,10 +1735,11 @@ class EX4StudioApp(ctk.CTk):
     def _show_welcome(self):
         welcome = (
             "╔══════════════════════════════════════════════════════════════╗\n"
-            "║           EX4 REVERSE ENGINEERING STUDIO  v2.0             ║\n"
+            "║                  EX4 STUDIO  v2.0                          ║\n"
             "╠══════════════════════════════════════════════════════════════╣\n"
             "║                                                            ║\n"
             "║  Features:                                                 ║\n"
+            "║  • EX4 header parsing (v400 & v500+ formats)               ║\n"
             "║  • Binary pattern recognition (60+ patterns)               ║\n"
             "║  • x86 disassembly via Capstone engine                     ║\n"
             "║  • PE header analysis                                      ║\n"
@@ -1746,7 +1747,7 @@ class EX4StudioApp(ctk.CTk):
             "║  • Trading strategy & indicator detection                  ║\n"
             "║  • Risk management analysis                                ║\n"
             "║  • Multi-language code generation:                         ║\n"
-            "║      MQL4 · MQL5 · Python · C · R                       ║\n"
+            "║      MQL4 · MQL5 · Python · C · R · Text                  ║\n"
             "║  • Hex viewer for binary inspection                        ║\n"
             "║  • JSON export for further processing                      ║\n"
             "║                                                            ║\n"
@@ -1811,7 +1812,7 @@ class EX4StudioApp(ctk.CTk):
             self._set_status("No code to export")
             return
         ext_map = {'MQL4': '.mq4', 'MQL5': '.mq5', 'Python': '.py',
-                   'C': '.c', 'R': '.R'}
+                   'C': '.c', 'R': '.R', 'Text': '.txt'}
         lang = self.lang_var.get()
         ext = ext_map.get(lang, '.txt')
         path = filedialog.asksaveasfilename(
