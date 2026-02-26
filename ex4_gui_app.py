@@ -4,9 +4,10 @@ EX4 Reverse Engineering Studio
 A comprehensive GUI application for decompiling MetaTrader 4 EX4 binary files
 into multiple readable programming languages.
 
-Consolidates all analysis techniques: pattern recognition, x86 disassembly,
-PE header analysis, string extraction, trading strategy detection, and
-multi-language code generation (MQL4, MQL5, Python, C, R, Text).
+Consolidates all analysis techniques: EX4 header parsing (v400/v500+),
+pattern recognition, x86 disassembly, PE header analysis, string extraction
+with quality filtering, trading strategy detection, filename analysis, and
+multi-language code generation (MQL4, MQL5, Python, C, R).
 """
 
 import os
@@ -178,16 +179,26 @@ class EX4AnalysisEngine:
         if len(data) < 16:
             raise ValueError("File too small to be a valid EX4 file")
 
+        ex4_header = self._parse_ex4_header(data)
         strings = self._extract_strings(data)
-        categories = self._categorize_strings(strings)
+
+        # Filter strings based on encryption status
+        quality_strings = self._filter_quality_strings(strings, ex4_header.get('is_encrypted', False))
+        categories = self._categorize_strings(quality_strings)
+
+        # Use filename for additional hints
+        filename = os.path.basename(filepath)
+        filename_hints = self._analyze_filename(filename)
 
         result = {
             'filepath': filepath,
-            'filename': os.path.basename(filepath),
-            'metadata': self._extract_metadata(data),
+            'filename': filename,
+            'ex4_header': ex4_header,
+            'metadata': self._extract_metadata(data, ex4_header, filename_hints),
             'pe_info': self._parse_pe_header(data),
             'patterns': self._find_patterns(data),
-            'strings': strings,
+            'strings': quality_strings,
+            'all_strings_count': len(strings),
             'string_categories': categories,
             'event_handlers': self._find_event_handlers(data),
             'trading_functions': self._find_trading_functions(data),
@@ -198,29 +209,168 @@ class EX4AnalysisEngine:
             'risk_management': self._analyze_risk(data),
             'disassembly': self._disassemble(data),
             'statistics': self._statistics(data, strings),
+            'filename_hints': filename_hints,
         }
-        logger.info("Analysis complete – %d patterns, %d strings",
-                     len(result['patterns']), len(strings))
+        logger.info("Analysis complete – %d patterns, %d strings (%d quality)",
+                     len(result['patterns']), len(strings), len(quality_strings))
         return result
+
+    # -- EX4 header parsing ---------------------------------------------------
+
+    def _parse_ex4_header(self, data: bytes) -> Dict:
+        """Parse the EX4-specific binary header."""
+        info = {
+            'is_ex4': False,
+            'format_version': 'Unknown',
+            'build_number': 0,
+            'is_encrypted': False,
+            'header_hash': '',
+            'program_type_flags': 0,
+        }
+
+        if len(data) < 48:
+            return info
+
+        magic = data[0:4]
+
+        if magic == b'EX4\x00':
+            info['is_ex4'] = True
+            info['format_version'] = '400 (Unencrypted)'
+            info['is_encrypted'] = False
+            if len(data) > 8:
+                info['header_size'] = struct.unpack('<I', data[4:8])[0]
+
+        elif magic == b'EX-\x04':
+            info['is_ex4'] = True
+            info['format_version'] = '500+ (Protected)'
+            info['is_encrypted'] = True
+            if len(data) > 8:
+                info['build_number'] = struct.unpack('<H', data[6:8])[0]
+            if len(data) > 48:
+                info['header_hash'] = data[32:48].hex()
+            if len(data) > 12:
+                info['program_type_flags'] = struct.unpack('<I', data[8:12])[0]
+
+        elif magic[:2] == b'EX':
+            info['is_ex4'] = True
+            info['format_version'] = f'Unknown ({magic.hex()})'
+
+        return info
+
+    # -- filename analysis ----------------------------------------------------
+
+    def _analyze_filename(self, filename: str) -> Dict:
+        """Extract hints from the filename itself."""
+        name = os.path.splitext(filename)[0]
+        hints = {
+            'name': name,
+            'possible_type': 'Indicator',
+            'keywords': [],
+        }
+
+        name_lower = name.lower()
+
+        type_keywords = {
+            'EA': 'Expert Advisor', 'expert': 'Expert Advisor',
+            'indicator': 'Indicator', 'indi': 'Indicator',
+            'script': 'Script', 'timer': 'Timer Utility',
+            'channel': 'Channel Indicator', 'fibo': 'Fibonacci Indicator',
+            'magic': 'Custom Indicator', 'snr': 'Support & Resistance Indicator',
+            'kombiner': 'Multi-Indicator Combiner', 'hyper': 'Custom Indicator',
+        }
+        for kw, ptype in type_keywords.items():
+            if kw.lower() in name_lower:
+                hints['possible_type'] = ptype
+                hints['keywords'].append(kw)
+
+        return hints
+
+    # -- string quality scoring -----------------------------------------------
+
+    def _score_string_quality(self, s: str) -> float:
+        """Score how likely a string is to be a real identifier/text vs random noise."""
+        if len(s) < 3:
+            return 0.0
+        score = 0.0
+
+        known = ['Order', 'Price', 'Stop', 'Profit', 'Loss', 'Buy', 'Sell',
+                 'Close', 'Open', 'High', 'Low', 'Volume', 'Time', 'Period',
+                 'Buffer', 'Index', 'Draw', 'Color', 'Alert', 'Comment',
+                 'Symbol', 'Bars', 'Line', 'Level', 'Mode', 'Style',
+                 'Chart', 'Object', 'Window', 'Init', 'Start', 'Tick',
+                 'Magic', 'Lot', 'Slippage', 'Expert', 'Indicator',
+                 'Script', 'Show', 'Display', 'Enable', 'Disable',
+                 'Copyright', 'Version', 'Link', 'Author', 'Description',
+                 'Fibo', 'Channel', 'Timer', 'Signal', 'Trend']
+        for kw in known:
+            if kw.lower() in s.lower():
+                score += 3.0
+
+        if re.search(r'[a-z][A-Z]', s):
+            score += 2.0
+
+        if '.' in s or '_' in s:
+            score += 1.5
+
+        if 5 <= len(s) <= 50:
+            score += 1.0
+
+        vowels = sum(1 for c in s.lower() if c in 'aeiou')
+        ratio = vowels / max(len(s), 1)
+        if 0.15 < ratio < 0.6:
+            score += 1.0
+
+        special = sum(1 for c in s if not c.isalnum() and c not in '._- ')
+        if special / max(len(s), 1) > 0.3:
+            score -= 2.0
+
+        known_short = ['SMA', 'EMA', 'RSI', 'ATR', 'CCI', 'ADX', 'SAR']
+        if len(s) < 6 and s.isupper() and not any(
+                kw.upper() == s for kw in known_short):
+            score -= 1.0
+
+        return score
+
+    def _filter_quality_strings(self, strings: List[str], is_encrypted: bool) -> List[str]:
+        """Filter strings based on quality score, more aggressive for encrypted files."""
+        threshold = 1.5 if is_encrypted else 0.0
+        scored = [(s, self._score_string_quality(s)) for s in strings]
+        return [s for s, score in scored if score >= threshold]
 
     # -- metadata -------------------------------------------------------------
 
-    def _extract_metadata(self, data: bytes) -> Dict:
+    def _extract_metadata(self, data: bytes, ex4_header: Dict = None, filename_hints: Dict = None) -> Dict:
         meta: Dict = {
             'type': 'Unknown', 'version': 'Unknown',
             'creation_date': 'Unknown', 'file_size': len(data),
             'copyright': 'Unknown', 'description': 'Unknown',
             'author': 'Unknown', 'link': 'Unknown',
+            'format': 'Unknown', 'is_encrypted': False,
+            'build_number': 0,
         }
+
+        # Use EX4 header info
+        if ex4_header:
+            meta['format'] = ex4_header.get('format_version', 'Unknown')
+            meta['is_encrypted'] = ex4_header.get('is_encrypted', False)
+            meta['build_number'] = ex4_header.get('build_number', 0)
+
+        # Use filename hints for type detection
+        if filename_hints:
+            if meta['type'] == 'Unknown':
+                meta['type'] = filename_hints.get('possible_type', 'Unknown')
+
+        # Original type detection from binary content
         dl = data.lower()
-        if b'expert' in dl or b'EA' in data:
-            meta['type'] = 'Expert Advisor'
-        elif b'script' in dl:
-            meta['type'] = 'Script'
-        elif b'library' in dl:
-            meta['type'] = 'Library'
-        elif b'indicator' in dl:
-            meta['type'] = 'Indicator'
+        if meta['type'] == 'Unknown':
+            if b'expert' in dl or b'EA' in data:
+                meta['type'] = 'Expert Advisor'
+            elif b'script' in dl:
+                meta['type'] = 'Script'
+            elif b'library' in dl:
+                meta['type'] = 'Library'
+            elif b'indicator' in dl:
+                meta['type'] = 'Indicator'
 
         for pat in [
             rb'version[\s=:]+([\d]+\.[\d]+(?:\.[\d]+)?)',
@@ -570,13 +720,22 @@ class EX4AnalysisEngine:
             total = len(data)
             entropy = -sum(
                 (c / total) * math.log2(c / total) for c in counts.values())
+
+        null_bytes = sum(1 for b in data if b == 0)
+        printable_bytes = sum(1 for b in data if 32 <= b <= 126)
+        high_bytes = sum(1 for b in data if b >= 128)
+
         return {
             'file_size_bytes': len(data),
             'file_size_kb': round(len(data) / 1024, 2),
             'total_strings': len(strings),
             'unique_strings': len(set(strings)),
             'has_mz_header': data[:2] == b'MZ',
+            'has_ex4_header': data[:2] == b'EX',
             'entropy': round(entropy, 4),
+            'null_byte_pct': round(null_bytes / max(len(data), 1) * 100, 1),
+            'printable_pct': round(printable_bytes / max(len(data), 1) * 100, 1),
+            'high_byte_pct': round(high_bytes / max(len(data), 1) * 100, 1),
         }
 
 
@@ -591,7 +750,7 @@ class CodeGenerator:
         gen_map = {
             'MQL4': self._mql4, 'MQL5': self._mql5,
             'Python': self._python, 'C': self._c,
-            'R': self._r, 'Text': self._text,
+            'R': self._r,
         }
         fn = gen_map.get(language)
         if fn is None:
@@ -620,12 +779,29 @@ class CodeGenerator:
     def _mql4(self, a: Dict) -> str:
         L = []
         meta = a['metadata']
+        cn = self._safe_class_name(a)
+        hints = a.get('filename_hints', {})
+        ex4h = a.get('ex4_header', {})
+
         L += self._header_box(f"Decompiled MQL4 – {meta['type']}")
+        L.append(f"// Source:    {a.get('filename', 'unknown')}")
         L.append(f"// Version:   {meta['version']}")
-        if meta.get('creation_date', 'Unknown') != 'Unknown':
-            L.append(f"// Created:   {meta['creation_date']}")
+        L.append(f"// Format:    EX4 {ex4h.get('format_version', 'Unknown')}")
+        if ex4h.get('build_number'):
+            L.append(f"// Build:     {ex4h['build_number']}")
         if meta.get('copyright', 'Unknown') != 'Unknown':
             L.append(f"// Copyright: {meta['copyright']}")
+        if meta.get('is_encrypted'):
+            L.append("// Note:      Encrypted EX4 - structure inferred from analysis")
+        L.append('')
+
+        # Property directives
+        L.append(f'#property copyright "{meta.get("copyright", cn)}"')
+        L.append(f'#property description "{hints.get("possible_type", meta["type"])} - decompiled from {a.get("filename", "EX4")}"')
+        if meta.get('link', 'Unknown') != 'Unknown':
+            L.append(f'#property link      "{meta["link"]}"')
+        L.append(f'#property version   "{meta["version"]}"')
+        L.append('#property strict')
         L.append('')
 
         strat = a.get('trading_strategy', {})
@@ -635,38 +811,73 @@ class CodeGenerator:
                 L.append(f"// Indicators: {', '.join(strat['indicators_used'])}")
             L.append('')
 
-        if meta['type'] == 'Indicator':
-            L.append('#property indicator_separate_window')
-            L.append('#property indicator_buffers 1')
+        if meta['type'] in ('Indicator', 'Channel Indicator', 'Fibonacci Indicator',
+                            'Custom Indicator', 'Support & Resistance Indicator',
+                            'Multi-Indicator Combiner') or 'indicator' in meta['type'].lower():
+            L.append('#property indicator_chart_window')
+            L.append('#property indicator_buffers 2')
+            L.append('#property indicator_color1 DodgerBlue')
+            L.append('#property indicator_color2 Red')
+            L.append('#property indicator_width1 2')
+            L.append('#property indicator_width2 2')
             L.append('')
 
         params = a.get('input_parameters', [])
         if params:
-            L.append('// Input Parameters (inferred)')
+            L.append('// Input Parameters (inferred from binary analysis)')
             for p in params:
                 L.append(f"extern {p['type']} {p['name']} = {p['default']};")
             L.append('')
+        else:
+            L.append('// Input Parameters (defaults - no parameters detected in binary)')
+            L.append('extern int    InpPeriod    = 14;')
+            L.append('extern int    InpShift     = 0;')
+            L.append('extern double InpDeviation = 2.0;')
+            L.append('')
 
-        if meta['type'] == 'Indicator':
-            L += ['// Indicator Buffers', 'double Buffer1[];', '']
+        L.append('// Indicator Buffers')
+        L.append('double Buffer1[];')
+        L.append('double Buffer2[];')
+        L.append('')
 
         L += self._header_box('Initialization')
-        L += ['int init()', '{']
-        if meta['type'] == 'Indicator':
-            L += ['    SetIndexStyle(0, DRAW_LINE);',
-                  '    SetIndexBuffer(0, Buffer1);',
-                  '    SetIndexLabel(0, "Main Buffer");']
-        L += ['    return(0);', '}', '']
+        L += ['int OnInit()', '{']
+        L.append(f'    IndicatorShortName("{cn}");')
+        L.append('    SetIndexStyle(0, DRAW_LINE);')
+        L.append('    SetIndexBuffer(0, Buffer1);')
+        L.append('    SetIndexLabel(0, "Main");')
+        L.append('    SetIndexStyle(1, DRAW_LINE);')
+        L.append('    SetIndexBuffer(1, Buffer2);')
+        L.append('    SetIndexLabel(1, "Signal");')
+        for bf in a.get('buffer_functions', []):
+            L.append(f'    // Detected: {bf["name"]} (x{bf["count"]})')
+        L += ['    return(INIT_SUCCEEDED);', '}', '']
 
         L += self._header_box('Deinitialization')
-        L += ['int deinit()', '{', '    return(0);', '}', '']
+        L += ['void OnDeinit(const int reason)', '{',
+              '    ObjectsDeleteAll(0, "' + cn + '_");',
+              '    Comment("");',
+              '}', '']
 
         if meta['type'] == 'Expert Advisor':
             L += self._header_box('Expert tick function')
             L += ['void OnTick()', '{']
         else:
             L += self._header_box('Indicator calculation')
-            L += ['int start()', '{']
+            L += ['int OnCalculate(const int rates_total,',
+                  '                const int prev_calculated,',
+                  '                const datetime &time[],',
+                  '                const double &open[],',
+                  '                const double &high[],',
+                  '                const double &low[],',
+                  '                const double &close[],',
+                  '                const long &tick_volume[],',
+                  '                const long &volume[],',
+                  '                const int &spread[])',
+                  '{',
+                  '    int limit = rates_total - prev_calculated;',
+                  '    if(prev_calculated > 0) limit++;',
+                  '']
 
         for ind in a.get('indicators_detected', []):
             n = ind['name']
@@ -701,11 +912,20 @@ class CodeGenerator:
                 if 'OrderSend' in tf['name']:
                     sl_str = 'Ask - stopLoss' if rm.get('has_stop_loss') else '0'
                     tp_str = 'Ask + takeProfit' if rm.get('has_take_profit') else '0'
-                    L.append(f'        int ticket = OrderSend(Symbol(), OP_BUY, 0.1, Ask, 3, {sl_str}, {tp_str}, "Trade", 0, 0, clrGreen);')
+                    L.append(f'        int ticket = OrderSend(Symbol(), OP_BUY, 0.1, Ask, 3,')
+                    L.append(f'            {sl_str}, {tp_str}, "{cn}", 0, 0, clrGreen);')
                     break
             L.append('    }')
         else:
-            L.append('    return(0);')
+            L.append('')
+            L.append('    // Main calculation loop')
+            L.append('    for(int i = limit - 1; i >= 0; i--)')
+            L.append('    {')
+            L.append('        Buffer1[i] = close[i];  // Placeholder - actual logic encrypted')
+            L.append('        Buffer2[i] = EMPTY_VALUE;')
+            L.append('    }')
+            L.append('')
+            L.append('    return(rates_total);')
 
         L.append('}')
         return '\n'.join(L)
@@ -716,9 +936,23 @@ class CodeGenerator:
         L = []
         meta = a['metadata']
         cn = self._safe_class_name(a)
+        hints = a.get('filename_hints', {})
+        ex4h = a.get('ex4_header', {})
+
         L += self._header_box(f"Decompiled MQL5 – {meta['type']}")
+        L.append(f"// Source:  {a.get('filename', 'unknown')}")
         L.append(f"// Version: {meta['version']}")
+        L.append(f"// Format:  EX4 {ex4h.get('format_version', 'Unknown')}")
+        if meta.get('is_encrypted'):
+            L.append("// Note:    Encrypted EX4 - structure inferred")
         L.append('')
+
+        L.append(f'#property copyright "{meta.get("copyright", cn)}"')
+        L.append(f'#property description "{hints.get("possible_type", meta["type"])}"')
+        L.append(f'#property version   "{meta["version"]}"')
+        L.append('#property strict')
+        L.append('')
+
         L.append('#include <Trade/Trade.mqh>')
         L.append('#include <Indicators/Indicators.mqh>')
         L.append('')
@@ -727,21 +961,37 @@ class CodeGenerator:
         if params:
             for p in params:
                 L.append(f"input {p['type']} {p['name']} = {p['default']};")
-            L.append('')
+        else:
+            L.append('input int    InpPeriod    = 14;')
+            L.append('input int    InpShift     = 0;')
+            L.append('input double InpDeviation = 2.0;')
+        L.append('')
 
         L.append('CTrade trade;')
+        L.append('double Buffer1[];')
+        L.append('double Buffer2[];')
         L.append('')
 
         L.append('int OnInit()')
         L.append('{')
-        if meta['type'] == 'Indicator':
-            L.append('    SetIndexBuffer(0, Buffer1);')
+        is_indicator = meta['type'] != 'Expert Advisor'
+        if is_indicator:
+            L.append('    SetIndexBuffer(0, Buffer1, INDICATOR_DATA);')
+            L.append('    SetIndexBuffer(1, Buffer2, INDICATOR_DATA);')
+            L.append('    PlotIndexSetInteger(0, PLOT_DRAW_TYPE, DRAW_LINE);')
+            L.append('    PlotIndexSetInteger(1, PLOT_DRAW_TYPE, DRAW_LINE);')
+            L.append(f'    IndicatorSetString(INDICATOR_SHORTNAME, "{cn}");')
+        else:
+            L.append('    trade.SetExpertMagicNumber(12345);')
+            L.append('    trade.SetDeviationInPoints(10);')
         L.append('    return(INIT_SUCCEEDED);')
         L.append('}')
         L.append('')
 
         L.append('void OnDeinit(const int reason)')
         L.append('{')
+        L.append(f'    ObjectsDeleteAll(0, "{cn}_");')
+        L.append('    Comment("");')
         L.append('}')
         L.append('')
 
@@ -755,6 +1005,7 @@ class CodeGenerator:
                 elif n == 'iRSI':
                     L.append('    int rsi_handle = iRSI(_Symbol, PERIOD_CURRENT, 14, PRICE_CLOSE);')
             L.append('')
+            L.append('    // Entry logic')
             L.append('    if(PositionsTotal() < 1) {')
             L.append('        trade.Buy(0.1, _Symbol);')
             L.append('    }')
@@ -771,6 +1022,15 @@ class CodeGenerator:
             L.append('                const long &volume[],')
             L.append('                const int &spread[])')
             L.append('{')
+            L.append('    int limit = rates_total - prev_calculated;')
+            L.append('    if(prev_calculated > 0) limit++;')
+            L.append('')
+            L.append('    for(int i = limit - 1; i >= 0; i--)')
+            L.append('    {')
+            L.append('        Buffer1[i] = close[i];  // Placeholder')
+            L.append('        Buffer2[i] = EMPTY_VALUE;')
+            L.append('    }')
+            L.append('')
             L.append('    return(rates_total);')
             L.append('}')
         return '\n'.join(L)
@@ -781,15 +1041,26 @@ class CodeGenerator:
         L = []
         meta = a['metadata']
         cn = self._safe_class_name(a, 'TradingStrategy')
+        hints = a.get('filename_hints', {})
+        ex4h = a.get('ex4_header', {})
+        stats = a.get('statistics', {})
 
         L.append('"""')
-        L.append(f"Converted from MT4 {meta['type']}")
-        L.append(f"Version: {meta['version']}")
+        L.append(f"Converted from MT4 {meta['type']}: {a.get('filename', 'unknown')}")
+        L.append(f"Type:       {hints.get('possible_type', meta['type'])}")
+        L.append(f"Version:    {meta['version']}")
+        L.append(f"Format:     EX4 {ex4h.get('format_version', 'Unknown')}")
+        if ex4h.get('is_encrypted'):
+            L.append("Encrypted:  Yes - structure inferred from binary analysis")
+        L.append(f"File Size:  {stats.get('file_size_kb', 0)} KB")
+        L.append(f"Entropy:    {stats.get('entropy', 0)}")
         strat = a.get('trading_strategy', {})
         if strat.get('type', 'Unknown') != 'Unknown':
-            L.append(f"Strategy: {strat['type']}")
+            L.append(f"Strategy:   {strat['type']}")
         if strat.get('indicators_used'):
             L.append(f"Indicators: {', '.join(strat['indicators_used'])}")
+        if meta.get('copyright', 'Unknown') != 'Unknown':
+            L.append(f"Copyright:  {meta['copyright']}")
         L.append('"""')
         L.append('')
         L.append('import numpy as np')
@@ -799,7 +1070,7 @@ class CodeGenerator:
         L.append('')
         L.append('')
         L.append(f'class {cn}:')
-        L.append(f'    """MT4 {meta["type"]} converted to Python."""')
+        L.append(f'    """MT4 {hints.get("possible_type", meta["type"])} converted to Python."""')
         L.append('')
 
         params = a.get('input_parameters', [])
@@ -809,24 +1080,30 @@ class CodeGenerator:
                 for p in params)
             L.append(f"    def __init__(self, {args}):")
         else:
-            L.append("    def __init__(self):")
+            L.append("    def __init__(self, period: int = 14, shift: int = 0, deviation: float = 2.0):")
 
         L.append("        self.data: pd.DataFrame = pd.DataFrame()")
         L.append("        self.indicators: Dict[str, pd.Series] = {}")
-        for p in params:
-            L.append(f"        self.{p['name'].lower()} = {p['name'].lower()}")
+        if params:
+            for p in params:
+                L.append(f"        self.{p['name'].lower()} = {p['name'].lower()}")
+        else:
+            L.append("        self.period = period")
+            L.append("        self.shift = shift")
+            L.append("        self.deviation = deviation")
         L.append('')
 
         L.append("    def initialize(self, data: pd.DataFrame) -> bool:")
         L.append('        """Load OHLCV data and compute indicators."""')
         L.append("        if data.empty:")
         L.append("            return False")
-        L.append("        self.data = data")
+        L.append("        self.data = data.copy()")
         L.append("        self._calculate_indicators()")
         L.append("        return True")
         L.append('')
 
         L.append("    def _calculate_indicators(self) -> None:")
+        L.append('        """Compute technical indicators from OHLCV data."""')
         inds = strat.get('indicators_used', [])
         if 'Moving Average' in inds:
             L.append("        # Moving Average")
@@ -851,19 +1128,38 @@ class CodeGenerator:
             L.append("        self.indicators['bb_upper'] = sma + 2 * std")
             L.append("        self.indicators['bb_lower'] = sma - 2 * std")
         if not inds:
-            L.append("        pass  # No indicators detected")
+            L.append("        # No specific indicators detected - using defaults")
+            L.append("        period = getattr(self, 'period', 14)")
+            L.append("        self.indicators['sma'] = self.data['close'].rolling(window=period).mean()")
+            L.append("        self.indicators['ema'] = self.data['close'].ewm(span=period).mean()")
         L.append('')
 
         if meta['type'] == 'Expert Advisor':
-            L.append("    def on_tick(self) -> Optional[Dict]:")
-            L.append('        """Process a new tick."""')
+            L.append("    def on_tick(self, tick_data: Dict) -> Optional[Dict]:")
+            L.append('        """Process a new tick and return trading signal."""')
             L.append("        self._calculate_indicators()")
-            L.append("        return {'action': None, 'price': self.data['close'].iloc[-1]}")
+            L.append("        signal = {'action': None, 'price': self.data['close'].iloc[-1]}")
+            L.append("        return signal")
         else:
-            L.append("    def calculate(self) -> pd.DataFrame:")
-            L.append('        """Return indicator values."""')
+            L.append("    def calculate(self, rates_total: int = 0) -> pd.DataFrame:")
+            L.append('        """Calculate indicator values for all bars."""')
             L.append("        self._calculate_indicators()")
-            L.append("        return pd.DataFrame(self.indicators)")
+            L.append("        result = pd.DataFrame(self.indicators)")
+            L.append("        return result")
+        L.append('')
+
+        # Risk management section
+        rm = a.get('risk_management', {})
+        if rm.get('features') or meta['type'] == 'Expert Advisor':
+            L.append("    def check_risk(self, price: float, lots: float = 0.1) -> Dict:")
+            L.append('        """Evaluate risk parameters for a potential trade."""')
+            L.append("        return {")
+            L.append("            'allowed': True,")
+            L.append("            'lots': lots,")
+            L.append("            'stop_loss': price * 0.99,")
+            L.append("            'take_profit': price * 1.02,")
+            L.append("        }")
+
         return '\n'.join(L)
 
     # -- C --------------------------------------------------------------------
@@ -871,25 +1167,64 @@ class CodeGenerator:
     def _c(self, a: Dict) -> str:
         L = []
         meta = a['metadata']
-        L.append(f'/* Converted from MT4 {meta["type"]} */')
-        L.append(f'/* Version: {meta["version"]} */')
+        cn = self._safe_class_name(a, 'ex4_program')
+        hints = a.get('filename_hints', {})
+        ex4h = a.get('ex4_header', {})
+        stats = a.get('statistics', {})
+
+        L.append(f'/* Converted from MT4 {meta["type"]}: {a.get("filename", "unknown")} */')
+        L.append(f'/* Type:     {hints.get("possible_type", meta["type"])} */')
+        L.append(f'/* Version:  {meta["version"]} */')
+        L.append(f'/* Format:   EX4 {ex4h.get("format_version", "Unknown")} */')
+        L.append(f'/* Size:     {stats.get("file_size_kb", 0)} KB  Entropy: {stats.get("entropy", 0)} */')
+        if meta.get('is_encrypted'):
+            L.append('/* Note:     Encrypted EX4 - structure inferred */')
         L.append('')
         L.append('#include <stdio.h>')
         L.append('#include <stdlib.h>')
+        L.append('#include <string.h>')
         L.append('#include <math.h>')
         L.append('')
-        L.append('typedef struct { double open, high, low, close; long volume; } Bar;')
+
+        L.append('/* OHLCV Bar data structure */')
+        L.append('typedef struct {')
+        L.append('    double open, high, low, close;')
+        L.append('    long   volume;')
+        L.append('    long   time;')
+        L.append('} Bar;')
         L.append('')
 
-        for p in a.get('input_parameters', []):
-            ctype = 'double' if p['type'] == 'double' else 'int'
-            L.append(f"{ctype} {p['name']} = {p['default']};")
+        L.append('/* Indicator result structure */')
+        L.append('typedef struct {')
+        L.append('    double *buffer1;')
+        L.append('    double *buffer2;')
+        L.append('    int     size;')
+        L.append(f'}} {cn}_Result;')
+        L.append('')
+
+        L.append('/* Parameters */')
         if a.get('input_parameters'):
-            L.append('')
-
-        L.append('int initialize(void) { return 1; }')
+            for p in a['input_parameters']:
+                ctype = 'double' if p['type'] == 'double' else 'int'
+                L.append(f"{ctype} {p['name']} = {p['default']};")
+        else:
+            L.append('int    inp_period    = 14;')
+            L.append('int    inp_shift     = 0;')
+            L.append('double inp_deviation = 2.0;')
         L.append('')
 
+        L.append(f'int {cn}_init(void) {{')
+        L.append(f'    printf("{cn} initialized\\n");')
+        L.append('    return 1;')
+        L.append('}')
+        L.append('')
+
+        L.append(f'void {cn}_deinit(void) {{')
+        L.append(f'    printf("{cn} deinitialized\\n");')
+        L.append('}')
+        L.append('')
+
+        # Indicator calculation functions
         for ind in a.get('indicators_detected', []):
             n = ind['name']
             if n == 'iMA':
@@ -911,15 +1246,33 @@ class CodeGenerator:
                 L.append('}')
                 L.append('')
 
-        L.append('int process_tick(Bar *bars, int n) {')
-        L.append('    if (n < 1) return 0;')
+        if not a.get('indicators_detected'):
+            L.append('double calc_sma(Bar *bars, int n, int period) {')
+            L.append('    if (n < period) return 0.0;')
+            L.append('    double sum = 0;')
+            L.append('    for (int i = n - period; i < n; i++) sum += bars[i].close;')
+            L.append('    return sum / period;')
+            L.append('}')
+            L.append('')
+
+        L.append(f'int {cn}_calculate(Bar *bars, int rates_total,')
+        L.append(f'    int prev_calculated, {cn}_Result *result)')
+        L.append('{')
+        L.append('    if (rates_total < 1) return 0;')
+        L.append('    int limit = rates_total - prev_calculated;')
+        L.append('    if (prev_calculated > 0) limit++;')
+        L.append('')
+        L.append('    for (int i = rates_total - limit; i < rates_total; i++) {')
         for ind in a.get('indicators_detected', []):
             n = ind['name']
             if n == 'iMA':
-                L.append('    double ma = calc_ma(bars, n, 14);')
+                L.append('        result->buffer1[i] = calc_ma(bars, i + 1, 14);')
             elif n == 'iRSI':
-                L.append('    double rsi = calc_rsi(bars, n, 14);')
-        L.append('    return 1;')
+                L.append('        result->buffer1[i] = calc_rsi(bars, i + 1, 14);')
+        if not a.get('indicators_detected'):
+            L.append('        result->buffer1[i] = calc_sma(bars, i + 1, inp_period);')
+        L.append('    }')
+        L.append('    return rates_total;')
         L.append('}')
         return '\n'.join(L)
 
@@ -929,29 +1282,72 @@ class CodeGenerator:
         L = []
         meta = a['metadata']
         cn = self._safe_class_name(a, 'trading_strategy')
-        L.append(f'# Converted from MT4 {meta["type"]}')
-        L.append(f'# Version: {meta["version"]}')
+        hints = a.get('filename_hints', {})
+        ex4h = a.get('ex4_header', {})
+        stats = a.get('statistics', {})
+
+        L.append(f'# Converted from MT4 {meta["type"]}: {a.get("filename", "unknown")}')
+        L.append(f'# Type:     {hints.get("possible_type", meta["type"])}')
+        L.append(f'# Version:  {meta["version"]}')
+        L.append(f'# Format:   EX4 {ex4h.get("format_version", "Unknown")}')
+        L.append(f'# Size:     {stats.get("file_size_kb", 0)} KB')
+        if meta.get('is_encrypted'):
+            L.append('# Note:     Encrypted EX4 - structure inferred')
         L.append('')
         L.append('library(quantmod)')
         L.append('library(TTR)')
+        L.append('library(xts)')
         L.append('')
-        L.append(f'{cn} <- function(data) {{')
+
+        L.append(f'{cn} <- function(data, period = 14, shift = 0, deviation = 2.0) {{')
         for p in a.get('input_parameters', []):
             L.append(f"    {p['name']} <- {p['default']}")
+        L.append('')
+        L.append('    # Validate input data')
+        L.append('    if (is.null(data) || nrow(data) < period) {')
+        L.append('        stop("Insufficient data for calculation")')
+        L.append('    }')
+        L.append('')
         L.append('    indicators <- list()')
+        L.append('')
+
+        has_indicators = False
         for ind in a.get('indicators_detected', []):
+            has_indicators = True
             n = ind['name']
             if n == 'iMA':
-                L.append('    indicators$ma <- SMA(Cl(data), n = 14)')
+                L.append('    # Moving Average')
+                L.append('    indicators$sma <- SMA(Cl(data), n = period)')
+                L.append('    indicators$ema <- EMA(Cl(data), n = period)')
             elif n == 'iRSI':
-                L.append('    indicators$rsi <- RSI(Cl(data), n = 14)')
+                L.append('    # Relative Strength Index')
+                L.append('    indicators$rsi <- RSI(Cl(data), n = period)')
             elif n == 'iMACD':
+                L.append('    # MACD')
                 L.append('    indicators$macd <- MACD(Cl(data), nFast = 12, nSlow = 26, nSig = 9)')
             elif n == 'iBands':
+                L.append('    # Bollinger Bands')
                 L.append('    indicators$bbands <- BBands(HLC(data), n = 20)')
             elif n == 'iATR':
-                L.append('    indicators$atr <- ATR(HLC(data), n = 14)')
-        L.append('    return(indicators)')
+                L.append('    # Average True Range')
+                L.append('    indicators$atr <- ATR(HLC(data), n = period)')
+
+        if not has_indicators:
+            L.append('    # Default indicators (no specific indicators detected)')
+            L.append('    indicators$sma <- SMA(Cl(data), n = period)')
+            L.append('    indicators$ema <- EMA(Cl(data), n = period)')
+            L.append('    indicators$rsi <- RSI(Cl(data), n = period)')
+        L.append('')
+
+        L.append('    # Combine results')
+        L.append('    result <- list(')
+        L.append('        indicators = indicators,')
+        L.append(f'        name = "{cn}",')
+        L.append(f'        type = "{hints.get("possible_type", meta["type"])}",')
+        L.append('        period = period')
+        L.append('    )')
+        L.append('')
+        L.append('    return(result)')
         L.append('}')
         return '\n'.join(L)
 
@@ -1073,19 +1469,16 @@ class CodeGenerator:
 # ---------------------------------------------------------------------------
 
 # Color palette
-DARK_BG = "#1a1a2e"
-DARK_SURFACE = "#16213e"
-DARK_CARD = "#0f3460"
-ACCENT = "#e94560"
-ACCENT_HOVER = "#ff6b81"
-TEXT_PRIMARY = "#eaeaea"
-TEXT_SECONDARY = "#a0a0b0"
+BG_PRIMARY = "#FAF3E1"        # Light cream - main background
+BG_SECONDARY = "#F5E7C6"      # Warm beige - cards/surfaces/sidebar
+ACCENT = "#FA8112"             # Orange - accent/buttons
+ACCENT_HOVER = "#E0720F"       # Darker orange for hover
+TEXT_PRIMARY = "#222222"        # Dark text
+TEXT_SECONDARY = "#555555"      # Medium gray text
+CODE_BG = "#2B2B2B"            # Dark code background
+CODE_FG = "#E0E0E0"            # Light code text
 SUCCESS = "#2ed573"
-WARNING = "#ffa502"
-CODE_BG = "#0d1117"
-CODE_FG = "#c9d1d9"
-SIDEBAR_BG = "#0f1629"
-SIDEBAR_ACTIVE = "#1a2744"
+WARNING = "#FA8112"
 
 
 class SidebarButton(ctk.CTkButton):
@@ -1095,7 +1488,7 @@ class SidebarButton(ctk.CTkButton):
         super().__init__(
             master, text=f"  {icon}  {text}", command=command,
             fg_color="transparent", text_color=TEXT_SECONDARY,
-            hover_color=SIDEBAR_ACTIVE, anchor="w",
+            hover_color=ACCENT, anchor="w",
             font=ctk.CTkFont(size=14), height=44, corner_radius=8, **kw)
 
 
@@ -1107,7 +1500,7 @@ class EX4StudioApp(ctk.CTk):
 
     def __init__(self):
         super().__init__()
-        ctk.set_appearance_mode("dark")
+        ctk.set_appearance_mode("light")
         ctk.set_default_color_theme("blue")
 
         self.title("EX4 Reverse Engineering Studio")
@@ -1132,7 +1525,7 @@ class EX4StudioApp(ctk.CTk):
         self._build_sidebar()
 
         # Main content area
-        self.main_frame = ctk.CTkFrame(self, fg_color=DARK_BG, corner_radius=0)
+        self.main_frame = ctk.CTkFrame(self, fg_color=BG_PRIMARY, corner_radius=0)
         self.main_frame.grid(row=0, column=1, sticky="nsew")
         self.main_frame.grid_columnconfigure(0, weight=1)
         self.main_frame.grid_rowconfigure(1, weight=1)
@@ -1141,17 +1534,17 @@ class EX4StudioApp(ctk.CTk):
         self._build_header()
 
         # Content notebook area
-        self.content = ctk.CTkFrame(self.main_frame, fg_color=DARK_BG)
+        self.content = ctk.CTkFrame(self.main_frame, fg_color=BG_PRIMARY)
         self.content.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 8))
         self.content.grid_columnconfigure(0, weight=1)
         self.content.grid_rowconfigure(0, weight=1)
 
         # Tab view
         self.tabview = ctk.CTkTabview(
-            self.content, fg_color=DARK_SURFACE,
-            segmented_button_fg_color=DARK_CARD,
+            self.content, fg_color=BG_SECONDARY,
+            segmented_button_fg_color=BG_SECONDARY,
             segmented_button_selected_color=ACCENT,
-            segmented_button_unselected_color=DARK_CARD,
+            segmented_button_unselected_color=BG_SECONDARY,
             corner_radius=12)
         self.tabview.grid(row=0, column=0, sticky="nsew")
 
@@ -1174,7 +1567,7 @@ class EX4StudioApp(ctk.CTk):
         self._show_welcome()
 
     def _build_sidebar(self):
-        sidebar = ctk.CTkFrame(self, width=220, fg_color=SIDEBAR_BG,
+        sidebar = ctk.CTkFrame(self, width=220, fg_color=BG_SECONDARY,
                                corner_radius=0)
         sidebar.grid(row=0, column=0, sticky="nsew")
         sidebar.grid_propagate(False)
@@ -1191,7 +1584,7 @@ class EX4StudioApp(ctk.CTk):
                      font=ctk.CTkFont(size=11),
                      text_color=TEXT_SECONDARY).pack()
 
-        ctk.CTkFrame(sidebar, height=1, fg_color=DARK_CARD).pack(
+        ctk.CTkFrame(sidebar, height=1, fg_color=ACCENT).pack(
             fill="x", padx=16, pady=12)
 
         # Navigation buttons
@@ -1200,7 +1593,7 @@ class EX4StudioApp(ctk.CTk):
         SidebarButton(sidebar, "Analyze", icon="\U0001F50D",
                       command=self._run_analysis).pack(fill="x", padx=12, pady=2)
 
-        ctk.CTkFrame(sidebar, height=1, fg_color=DARK_CARD).pack(
+        ctk.CTkFrame(sidebar, height=1, fg_color=ACCENT).pack(
             fill="x", padx=16, pady=12)
 
         # Language selector
@@ -1209,13 +1602,13 @@ class EX4StudioApp(ctk.CTk):
                      text_color=TEXT_SECONDARY).pack(padx=16, anchor="w")
         self.lang_var = ctk.StringVar(value="MQL4")
         self.lang_menu = ctk.CTkOptionMenu(
-            sidebar, values=["MQL4", "MQL5", "Python", "C", "R", "Text"],
+            sidebar, values=["MQL4", "MQL5", "Python", "C", "R"],
             variable=self.lang_var, command=self._on_language_change,
-            fg_color=DARK_CARD, button_color=ACCENT,
+            fg_color=BG_PRIMARY, button_color=ACCENT,
             button_hover_color=ACCENT_HOVER, width=180)
         self.lang_menu.pack(padx=16, pady=(4, 12))
 
-        ctk.CTkFrame(sidebar, height=1, fg_color=DARK_CARD).pack(
+        ctk.CTkFrame(sidebar, height=1, fg_color=ACCENT).pack(
             fill="x", padx=16, pady=4)
 
         # Export buttons
@@ -1234,7 +1627,7 @@ class EX4StudioApp(ctk.CTk):
                      text_color=TEXT_SECONDARY).pack(pady=8)
 
     def _build_header(self):
-        header = ctk.CTkFrame(self.main_frame, fg_color=DARK_SURFACE,
+        header = ctk.CTkFrame(self.main_frame, fg_color=BG_SECONDARY,
                               height=64, corner_radius=0)
         header.grid(row=0, column=0, sticky="ew", padx=0, pady=0)
         header.grid_propagate(False)
@@ -1242,7 +1635,7 @@ class EX4StudioApp(ctk.CTk):
 
         self.file_label = ctk.CTkLabel(
             header, text="No file loaded",
-            font=ctk.CTkFont(size=14), text_color=TEXT_SECONDARY)
+            font=ctk.CTkFont(size=14), text_color=TEXT_PRIMARY)
         self.file_label.grid(row=0, column=0, padx=20, pady=16, sticky="w")
 
         self.info_label = ctk.CTkLabel(
@@ -1328,7 +1721,7 @@ class EX4StudioApp(ctk.CTk):
         logger.addHandler(h)
 
     def _build_status_bar(self):
-        bar = ctk.CTkFrame(self.main_frame, height=32, fg_color=DARK_CARD,
+        bar = ctk.CTkFrame(self.main_frame, height=32, fg_color=BG_SECONDARY,
                            corner_radius=0)
         bar.grid(row=2, column=0, sticky="ew")
         bar.grid_propagate(False)
@@ -1353,7 +1746,7 @@ class EX4StudioApp(ctk.CTk):
             "║  • Trading strategy & indicator detection                  ║\n"
             "║  • Risk management analysis                                ║\n"
             "║  • Multi-language code generation:                         ║\n"
-            "║      MQL4 · MQL5 · Python · C · R · Text                  ║\n"
+            "║      MQL4 · MQL5 · Python · C · R                       ║\n"
             "║  • Hex viewer for binary inspection                        ║\n"
             "║  • JSON export for further processing                      ║\n"
             "║                                                            ║\n"
@@ -1418,7 +1811,7 @@ class EX4StudioApp(ctk.CTk):
             self._set_status("No code to export")
             return
         ext_map = {'MQL4': '.mq4', 'MQL5': '.mq5', 'Python': '.py',
-                   'C': '.c', 'R': '.R', 'Text': '.txt'}
+                   'C': '.c', 'R': '.R'}
         lang = self.lang_var.get()
         ext = ext_map.get(lang, '.txt')
         path = filedialog.asksaveasfilename(
@@ -1450,41 +1843,67 @@ class EX4StudioApp(ctk.CTk):
         strat = a.get('trading_strategy', {})
         risk = a.get('risk_management', {})
         stats = a.get('statistics', {})
+        ex4h = a.get('ex4_header', {})
+        hints = a.get('filename_hints', {})
 
         lines = []
         lines.append(f"{'═' * 60}")
         lines.append(f"  FILE: {a.get('filename', 'N/A')}")
         lines.append(f"{'═' * 60}")
         lines.append("")
-        lines.append(f"  Type:         {meta['type']}")
-        lines.append(f"  Version:      {meta['version']}")
-        lines.append(f"  Size:         {stats.get('file_size_kb', 0)} KB")
-        lines.append(f"  Entropy:      {stats.get('entropy', 0)}")
+
+        lines.append("  EX4 FORMAT")
+        lines.append(f"  ├─ Format:       {ex4h.get('format_version', 'Unknown')}")
+        lines.append(f"  ├─ Encrypted:    {'Yes' if ex4h.get('is_encrypted') else 'No'}")
+        if ex4h.get('build_number'):
+            lines.append(f"  ├─ Build:        {ex4h['build_number']}")
+        if ex4h.get('header_hash'):
+            lines.append(f"  └─ Hash:         {ex4h['header_hash']}")
+        else:
+            if ex4h.get('header_size'):
+                lines.append(f"  └─ Header Size:  {ex4h['header_size']}")
+        lines.append("")
+
+        lines.append("  FILE INFO")
+        lines.append(f"  ├─ Type:         {meta['type']}")
+        if hints.get('possible_type') and hints['possible_type'] != meta['type']:
+            lines.append(f"  ├─ Hint:         {hints['possible_type']} (from filename)")
+        lines.append(f"  ├─ Version:      {meta['version']}")
+        lines.append(f"  ├─ Size:         {stats.get('file_size_kb', 0)} KB")
+        lines.append(f"  ├─ Entropy:      {stats.get('entropy', 0)}")
         if meta.get('copyright', 'Unknown') != 'Unknown':
-            lines.append(f"  Copyright:    {meta['copyright']}")
+            lines.append(f"  ├─ Copyright:    {meta['copyright']}")
         if meta.get('author', 'Unknown') != 'Unknown':
-            lines.append(f"  Author:       {meta['author']}")
+            lines.append(f"  ├─ Author:       {meta['author']}")
+        if meta.get('link', 'Unknown') != 'Unknown':
+            lines.append(f"  └─ Link:         {meta['link']}")
+        lines.append("")
+
+        lines.append("  BYTE ANALYSIS")
+        lines.append(f"  ├─ Printable:    {stats.get('printable_pct', 0)}%")
+        lines.append(f"  ├─ High bytes:   {stats.get('high_byte_pct', 0)}%")
+        lines.append(f"  └─ Null bytes:   {stats.get('null_byte_pct', 0)}%")
         lines.append("")
 
         if pe.get('valid_pe'):
             lines.append("  PE HEADER")
-            lines.append(f"  ├─ Machine:    {pe.get('machine', 'N/A')}")
+            lines.append(f"  ├─ Machine:      {pe.get('machine', 'N/A')}")
             if pe.get('timestamp'):
-                lines.append(f"  ├─ Compiled:   {pe['timestamp']}")
+                lines.append(f"  ├─ Compiled:     {pe['timestamp']}")
             if pe.get('num_sections'):
-                lines.append(f"  └─ Sections:   {pe['num_sections']}")
+                lines.append(f"  └─ Sections:     {pe['num_sections']}")
             lines.append("")
 
         if strat.get('type', 'Unknown') != 'Unknown':
             lines.append(f"  STRATEGY: {strat['type']}")
             if strat.get('indicators_used'):
-                lines.append(f"  ├─ Indicators: {', '.join(strat['indicators_used'])}")
+                lines.append(f"  ├─ Indicators:   {', '.join(strat['indicators_used'])}")
             if strat.get('timeframes'):
-                lines.append(f"  ├─ Timeframes: {', '.join(strat['timeframes'])}")
+                lines.append(f"  ├─ Timeframes:   {', '.join(strat['timeframes'])}")
             if strat.get('entry_patterns'):
-                lines.append(f"  ├─ Entry:      {', '.join(strat['entry_patterns'])}")
+                lines.append(f"  ├─ Entry:        {', '.join(strat['entry_patterns'])}")
             if strat.get('exit_patterns'):
-                lines.append(f"  └─ Exit:       {', '.join(strat['exit_patterns'])}")
+                lines.append(f"  └─ Exit:         {', '.join(strat['exit_patterns'])}")
             lines.append("")
 
         if risk.get('features'):
@@ -1526,10 +1945,14 @@ class EX4StudioApp(ctk.CTk):
                          f"{dis['total_instructions']} instructions")
             lines.append("")
 
-        lines.append(f"  Patterns: {len(a.get('patterns', []))}  |  "
-                     f"Strings: {stats.get('total_strings', 0)}  |  "
-                     f"Handlers: {len(handlers)}  |  "
-                     f"Indicators: {len(inds)}")
+        lines.append("  ANALYSIS RESULTS")
+        all_str_count = a.get('all_strings_count', stats.get('total_strings', 0))
+        quality_count = len(a.get('strings', []))
+        lines.append(f"  ├─ Patterns:     {len(a.get('patterns', []))}")
+        lines.append(f"  ├─ Strings:      {all_str_count} extracted, {quality_count} quality")
+        lines.append(f"  ├─ Handlers:     {len(handlers)}")
+        lines.append(f"  ├─ Indicators:   {len(inds)}")
+        lines.append(f"  └─ Trading fns:  {len(tfuncs)}")
         lines.append(f"{'═' * 60}")
 
         self.overview_text.insert("end", "\n".join(lines))
@@ -1545,32 +1968,104 @@ class EX4StudioApp(ctk.CTk):
         self.disasm_text.delete("0.0", "end")
         dis = a.get('disassembly', {})
         if dis.get('error'):
-            self.disasm_text.insert("end", f"[!] {dis['error']}\n")
-            return
+            self.disasm_text.insert("end", f"[!] {dis['error']}\n\n")
+
         funcs = dis.get('functions', [])
-        if not funcs:
-            self.disasm_text.insert("end", "[i] No function prologues detected\n")
-            return
-        for fn in funcs:
-            self.disasm_text.insert(
-                "end",
-                f"\n{'─' * 50}\n"
-                f"Function @ {fn['start']} – {fn['end']}  "
-                f"({fn['size']} bytes)\n"
-                f"{'─' * 50}\n")
-            for ins in fn['instructions']:
-                self.disasm_text.insert("end", f"  {ins}\n")
+        if funcs:
+            for fn in funcs:
+                self.disasm_text.insert(
+                    "end",
+                    f"\n{'─' * 50}\n"
+                    f"Function @ {fn['start']} – {fn['end']}  "
+                    f"({fn['size']} bytes)\n"
+                    f"{'─' * 50}\n")
+                for ins in fn['instructions']:
+                    self.disasm_text.insert("end", f"  {ins}\n")
+        else:
+            ex4h = a.get('ex4_header', {})
+            stats = a.get('statistics', {})
+            lines = []
+            lines.append("╔══════════════════════════════════════════════════╗")
+            lines.append("║           BINARY STRUCTURE ANALYSIS              ║")
+            lines.append("╚══════════════════════════════════════════════════╝")
+            lines.append("")
+
+            if ex4h.get('is_encrypted'):
+                lines.append("[i] File uses encrypted EX4 format (v500+)")
+                lines.append("    Standard x86 disassembly is not applicable.")
+                lines.append("    The bytecode is protected with MT4's encryption.")
+                lines.append("")
+
+            lines.append("EX4 HEADER ANALYSIS")
+            lines.append("─" * 50)
+            lines.append(f"  Magic Bytes:     {ex4h.get('format_version', 'N/A')}")
+            if ex4h.get('build_number'):
+                lines.append(f"  MT4 Build:       {ex4h['build_number']}")
+            if ex4h.get('header_hash'):
+                lines.append(f"  Header Hash:     {ex4h['header_hash']}")
+            if ex4h.get('program_type_flags'):
+                lines.append(f"  Type Flags:      0x{ex4h['program_type_flags']:08x}")
+            lines.append("")
+
+            lines.append("BYTE FREQUENCY ANALYSIS")
+            lines.append("─" * 50)
+            entropy = stats.get('entropy', 0)
+            lines.append(f"  File Entropy:    {entropy} bits/byte")
+            if entropy > 7.5:
+                lines.append("  Assessment:      High entropy - encrypted/compressed data")
+            elif entropy > 6.0:
+                lines.append("  Assessment:      Moderate entropy - mixed code/data")
+            else:
+                lines.append("  Assessment:      Low entropy - mostly code/text")
+            lines.append(f"  Printable:       {stats.get('printable_pct', 0)}%")
+            lines.append(f"  High bytes:      {stats.get('high_byte_pct', 0)}%")
+            lines.append(f"  Null bytes:      {stats.get('null_byte_pct', 0)}%")
+            lines.append("")
+
+            lines.append("FILE STRUCTURE")
+            lines.append("─" * 50)
+            lines.append(f"  Total Size:      {stats.get('file_size_bytes', 0)} bytes")
+            lines.append(f"  MZ Header:       {'Present' if stats.get('has_mz_header') else 'Not present'}")
+            lines.append(f"  EX4 Header:      {'Present' if stats.get('has_ex4_header') else 'Not present'}")
+
+            self.disasm_text.insert("end", "\n".join(lines))
 
     def _populate_strings(self, a: Dict):
         self.strings_text.delete("0.0", "end")
         cats = a.get('string_categories', {})
+        has_content = False
+
         for cat_name, items in cats.items():
             if items:
+                has_content = True
                 self.strings_text.insert(
                     "end", f"\n{'─' * 40}\n  {cat_name.upper()} "
                            f"({len(items)})\n{'─' * 40}\n")
                 for s in items:
                     self.strings_text.insert("end", f"  {s}\n")
+
+        if not has_content:
+            ex4h = a.get('ex4_header', {})
+            lines = []
+            if ex4h.get('is_encrypted'):
+                lines.append("╔══════════════════════════════════════════════╗")
+                lines.append("║     ENCRYPTED EX4 - LIMITED STRING DATA      ║")
+                lines.append("╚══════════════════════════════════════════════╝")
+                lines.append("")
+                lines.append("This file uses MT4's protected EX4 format.")
+                lines.append("String data is encrypted and cannot be fully extracted.")
+                lines.append("")
+
+            all_strings = a.get('strings', [])
+            if all_strings:
+                lines.append(f"EXTRACTED STRINGS ({len(all_strings)} found)")
+                lines.append("─" * 40)
+                for s in all_strings[:200]:
+                    lines.append(f"  {s}")
+            else:
+                lines.append("No meaningful strings could be extracted.")
+
+            self.strings_text.insert("end", "\n".join(lines))
 
     def _populate_hex(self, max_bytes: int = 4096):
         self.hex_text.delete("0.0", "end")
