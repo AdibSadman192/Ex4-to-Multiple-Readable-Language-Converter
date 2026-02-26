@@ -305,11 +305,15 @@ class EX4AnalysisEngine:
         # Extract author from copyright if present
         if meta['author'] == 'Unknown' and meta['copyright'] != 'Unknown':
             cr = meta['copyright']
-            m = re.search(r'(?:copyright|©|\(c\))\s*(?:\d{4}[,\s]*)?\s*(.*)', cr, re.IGNORECASE)
-            if m:
-                author = m.group(1).strip().rstrip('.')
-                if author:
-                    meta['author'] = author
+            # Strip copyright markers, symbols and year to extract author name
+            author = re.sub(r'(?:\(c\)\s*|copyright\s*|©\s*)', '', cr,
+                            flags=re.IGNORECASE).strip()
+            author = re.sub(r'^\d{4}[,\s]*', '', author).strip().rstrip('.')
+            # Remove trailing contact info after dash
+            author = re.sub(r'\s*-\s*Telegram:.*$', '', author,
+                            flags=re.IGNORECASE).strip().rstrip('.')
+            if author and len(author) >= 2:
+                meta['author'] = author
 
         return meta
 
@@ -428,42 +432,90 @@ class EX4AnalysisEngine:
         }
         func_kw = [
             'OnInit', 'OnDeinit', 'OnTick', 'OnCalculate', 'OnStart',
-            'OrderSend', 'OrderClose', 'OrderModify', 'iMA', 'iRSI',
+            'OrderSend', 'OrderClose', 'OrderModify',
             'SetIndexBuffer', 'SetIndexStyle', 'IndicatorBuffers',
         ]
+        # Short function names that need word-boundary matching
+        func_short = ['iMA', 'iRSI', 'iMACD', 'iATR', 'iCCI']
         param_kw = [
             'period', 'shift', 'method', 'price', 'lot', 'stop', 'take',
-            'risk', 'magic', 'slippage',
+            'risk', 'magic', 'slippage', 'color', 'show', 'alert',
+            'bars', 'width', 'sound', 'comment', 'level', 'mode',
+            'fast', 'slow', 'signal', 'deviation', 'percent',
         ]
-        ind_kw = ['MA', 'RSI', 'MACD', 'ATR', 'Bollinger', 'Stochastic',
-                   'CCI', 'ADX', 'Ichimoku']
+        ind_kw_long = ['MACD', 'Bollinger', 'Stochastic', 'Ichimoku',
+                       'Channel', 'Fibo', 'LinReg', 'Fractal']
+        ind_kw_short = ['MA', 'RSI', 'ATR', 'CCI', 'ADX', 'SAR', 'Band']
         for s in strings:
             sl = s.lower()
+            stripped = s.strip()
             placed = False
+            # Skip noise: strings that are mostly non-alphanumeric
+            alpha_count = sum(1 for c in stripped if c.isalpha())
+            if len(stripped) > 0 and alpha_count / len(stripped) < 0.5:
+                cats['other'].append(s)
+                continue
+            # Skip very short strings
+            if len(stripped) < 3:
+                cats['other'].append(s)
+                continue
+            # Skip copyright/metadata strings
+            if sl.startswith('copyright') or sl.startswith('(c)'):
+                cats['other'].append(s)
+                continue
             for kw in func_kw:
-                if kw.lower() in sl:
+                if kw.lower() in sl and len(stripped) < 100:
                     cats['functions'].append(s)
                     placed = True
                     break
+            if not placed:
+                for kw in func_short:
+                    if re.search(r'\b' + re.escape(kw) + r'\b', stripped):
+                        cats['functions'].append(s)
+                        placed = True
+                        break
             if placed:
                 continue
+            # Detect dotted names like Show.MidLine, Sound.Alert
+            if re.match(r'^[A-Za-z]\w+\.[A-Za-z]\w+$', stripped):
+                cats['parameters'].append(s)
+                continue
+            # Detect camelCase variable names (require uppercase after
+            # lowercase start and min 5 chars to filter noise)
+            if (re.match(r'^[a-z][a-zA-Z0-9]+$', stripped)
+                    and len(stripped) >= 5
+                    and any(c.isupper() for c in stripped[1:])):
+                cats['variables'].append(s)
+                continue
+            # Detect PascalCase names (min 5 chars with mixed case)
+            if (re.match(r'^[A-Z][a-zA-Z0-9]+$', stripped)
+                    and len(stripped) >= 5
+                    and any(c.islower() for c in stripped)):
+                cats['variables'].append(s)
+                continue
             for kw in param_kw:
-                if kw in sl:
+                if kw in sl and len(stripped) < 80:
                     cats['parameters'].append(s)
                     placed = True
                     break
             if placed:
                 continue
-            for kw in ind_kw:
+            for kw in ind_kw_long:
                 if kw.lower() in sl:
                     cats['indicators'].append(s)
                     placed = True
                     break
+            if not placed:
+                for kw in ind_kw_short:
+                    if re.search(r'\b' + re.escape(kw) + r'\b', stripped):
+                        cats['indicators'].append(s)
+                        placed = True
+                        break
             if placed:
                 continue
             if len(s) == 6 and s.isalpha() and s.isupper():
                 cats['symbols'].append(s)
-            elif '//' in s or '#' in s:
+            elif s.strip().startswith('//') or s.strip().startswith('#'):
                 cats['comments'].append(s)
             else:
                 cats['other'].append(s)
