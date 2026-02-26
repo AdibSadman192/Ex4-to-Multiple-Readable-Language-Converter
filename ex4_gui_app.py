@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-EX4 Reverse Engineering Studio
-A comprehensive GUI application for decompiling MetaTrader 4 EX4 binary files
-into multiple readable programming languages.
+EX4 Studio
+A comprehensive GUI application for analyzing MetaTrader 4 EX4 binary files
+and converting them into multiple readable programming languages.
 
 Consolidates all analysis techniques: pattern recognition, x86 disassembly,
 PE header analysis, string extraction, trading strategy detection, and
@@ -178,22 +178,75 @@ class EX4AnalysisEngine:
         if len(data) < 16:
             raise ValueError("File too small to be a valid EX4 file")
 
+        metadata = self._extract_metadata(data)
         strings = self._extract_strings(data)
+
+        # For old format, also extract parameter names from sections
+        ex4_params = self._parse_ex4_parameters(data, metadata)
+
         categories = self._categorize_strings(strings)
+
+        # Search for patterns in both raw data and extracted strings
+        string_blob = '\n'.join(strings).encode('ascii', errors='ignore')
+        patterns = self._find_patterns(data)
+        string_patterns = self._find_patterns(string_blob)
+        seen_pats = {p['pattern'] for p in patterns}
+        for sp in string_patterns:
+            if sp['pattern'] not in seen_pats:
+                patterns.append(sp)
+                seen_pats.add(sp['pattern'])
+
+        # Detect event handlers from both binary and strings
+        handlers = self._find_event_handlers(data)
+        for s in strings:
+            for h in MT4_EVENT_HANDLERS:
+                hname = h.decode()
+                if hname in s and hname not in handlers:
+                    handlers.append(hname)
+
+        # Detect indicators from strings too
+        indicators = self._find_indicators(data)
+        ind_names = {i['name'] for i in indicators}
+        for s in strings:
+            for pat, desc in MT4_INDICATORS.items():
+                pname = pat.decode()
+                if pname in s and pname not in ind_names:
+                    indicators.append({'name': pname, 'description': desc,
+                                       'count': 1})
+                    ind_names.add(pname)
+
+        # Detect trading functions from strings too
+        trading_funcs = self._find_trading_functions(data)
+        tf_names = {f['name'] for f in trading_funcs}
+        for s in strings:
+            for pat, desc in MT4_FUNCTIONS.items():
+                pname = pat.decode()
+                if pname in s and pname not in tf_names:
+                    trading_funcs.append({'name': pname, 'description': desc,
+                                          'count': 1})
+                    tf_names.add(pname)
+
+        # Extract input parameters from both strings and EX4 sections
+        input_params = self._extract_input_parameters(categories)
+        param_names = {p['name'] for p in input_params}
+        for ep in ex4_params:
+            if ep['name'] not in param_names:
+                input_params.append(ep)
+                param_names.add(ep['name'])
 
         result = {
             'filepath': filepath,
             'filename': os.path.basename(filepath),
-            'metadata': self._extract_metadata(data),
+            'metadata': metadata,
             'pe_info': self._parse_pe_header(data),
-            'patterns': self._find_patterns(data),
+            'patterns': patterns,
             'strings': strings,
             'string_categories': categories,
-            'event_handlers': self._find_event_handlers(data),
-            'trading_functions': self._find_trading_functions(data),
-            'indicators_detected': self._find_indicators(data),
+            'event_handlers': handlers,
+            'trading_functions': trading_funcs,
+            'indicators_detected': indicators,
             'buffer_functions': self._find_buffer_functions(data),
-            'input_parameters': self._extract_input_parameters(categories),
+            'input_parameters': input_params,
             'trading_strategy': self._analyze_strategy(data),
             'risk_management': self._analyze_risk(data),
             'disassembly': self._disassemble(data),
@@ -211,40 +264,164 @@ class EX4AnalysisEngine:
             'creation_date': 'Unknown', 'file_size': len(data),
             'copyright': 'Unknown', 'description': 'Unknown',
             'author': 'Unknown', 'link': 'Unknown',
+            'format': 'Unknown', 'build': 0, 'codepage': 0,
         }
-        dl = data.lower()
-        if b'expert' in dl or b'EA' in data:
-            meta['type'] = 'Expert Advisor'
-        elif b'script' in dl:
-            meta['type'] = 'Script'
-        elif b'library' in dl:
-            meta['type'] = 'Library'
-        elif b'indicator' in dl:
+
+        # Detect EX4 format from magic bytes
+        magic = data[:4]
+        if magic == b'EX4\x00':
+            # Legacy format (build < 600, unencrypted)
+            meta['format'] = 'Legacy (EX4, unencrypted)'
+            if len(data) >= 12:
+                meta['_data_size'] = struct.unpack('<I', data[4:8])[0]
+                meta['_code_size'] = struct.unpack('<I', data[8:12])[0]
+            # Copyright string at offset 0x0C (null-terminated ASCII)
+            if len(data) > 12:
+                end = data.index(b'\x00', 12) if b'\x00' in data[12:100] else min(100, len(data))
+                raw = data[12:end]
+                if len(raw) >= 3:
+                    meta['copyright'] = raw.decode('ascii', errors='replace').strip()
+            # Old format is always an indicator for build < 600
             meta['type'] = 'Indicator'
+        elif magic == b'EX-\x04':
+            # New format (build 600+, encrypted)
+            meta['format'] = 'Modern (EX-, encrypted)'
+            if len(data) >= 20:
+                meta['build'] = struct.unpack('<H', data[6:8])[0]
+                meta['codepage'] = struct.unpack('<I', data[16:20])[0]
+            # Type detection from header flags at offset 0x0B
+            if len(data) > 11:
+                type_byte = data[11]
+                if type_byte & 0x80:
+                    meta['type'] = 'Expert Advisor'
+                elif type_byte & 0x40:
+                    meta['type'] = 'Indicator'
+                elif type_byte & 0x20:
+                    meta['type'] = 'Script'
+                else:
+                    meta['type'] = 'Library'
+            meta['version'] = f"Build {meta['build']}"
+        else:
+            meta['format'] = 'Unknown'
 
-        for pat in [
-            rb'version[\s=:]+([\d]+\.[\d]+(?:\.[\d]+)?)',
-            rb'v[\s]*([\d]+\.[\d]+(?:\.[\d]+)?)',
-        ]:
-            m = re.search(pat, data, re.IGNORECASE)
-            if m:
-                meta['version'] = m.group(1).decode('ascii', errors='ignore')
-                break
+        # Fallback type detection from string content
+        if meta['type'] == 'Unknown':
+            dl = data.lower()
+            if b'expert' in dl or b'EA' in data:
+                meta['type'] = 'Expert Advisor'
+            elif b'script' in dl:
+                meta['type'] = 'Script'
+            elif b'library' in dl:
+                meta['type'] = 'Library'
+            elif b'indicator' in dl:
+                meta['type'] = 'Indicator'
 
-        for field, regex in [
-            ('copyright', rb'copyright[\s]*[:(\s]*([^\x00]{3,50})'),
-            ('description', rb'description[\s]*[:(\s]*([^\x00]{3,100})'),
-            ('author', rb'author[\s]*[:(\s]*([^\x00]{3,50})'),
-        ]:
-            m = re.search(regex, data, re.IGNORECASE)
-            if m:
-                meta[field] = m.group(1).decode('ascii', errors='ignore').strip()
+        # Extract version from string patterns
+        if meta['version'] == 'Unknown':
+            for pat in [
+                rb'version[\s=:]+([\d]+\.[\d]+(?:\.[\d]+)?)',
+                rb'v[\s]*([\d]+\.[\d]+(?:\.[\d]+)?)',
+            ]:
+                m = re.search(pat, data, re.IGNORECASE)
+                if m:
+                    meta['version'] = m.group(1).decode('ascii', errors='ignore')
+                    break
+
+        # Extract copyright, description, author from string patterns
+        if meta['copyright'] == 'Unknown':
+            for field, regex in [
+                ('copyright', rb'copyright[\s]*[:(\s]*([^\x00]{3,50})'),
+                ('description', rb'description[\s]*[:(\s]*([^\x00]{3,100})'),
+                ('author', rb'author[\s]*[:(\s]*([^\x00]{3,50})'),
+            ]:
+                m = re.search(regex, data, re.IGNORECASE)
+                if m:
+                    meta[field] = m.group(1).decode('ascii', errors='ignore').strip()
 
         m = re.search(rb'(https?://[^\x00\s]{3,100})', data)
         if m:
             meta['link'] = m.group(1).decode('ascii', errors='ignore').strip()
 
         return meta
+
+    # -- EX4 parameter section parsing ----------------------------------------
+
+    def _parse_ex4_parameters(self, data: bytes, metadata: Dict) -> List[Dict]:
+        """Parse input parameters from old-format EX4 parameter tables."""
+        params = []
+        magic = data[:4]
+        if magic != b'EX4\x00' or len(data) < 100:
+            return params
+
+        # In old format, find the parameter table by looking for
+        # blocks of 56 bytes containing null-terminated ASCII names
+        # Skip header: magic(4) + data_size(4) + code_size(4) + copyright
+        pos = 12
+        while pos < min(len(data), 200) and data[pos] != 0:
+            pos += 1
+        pos += 1  # skip null terminator
+
+        # Scan for parameter table entries (56-byte records)
+        entry_size = 56
+        name_offset = 12  # name starts 12 bytes into each entry
+        search_start = max(pos, 0x100)
+
+        # Find first entry by looking for readable names at 12-byte offsets
+        for scan in range(search_start, min(len(data) - entry_size, 0x800)):
+            candidate = data[scan + name_offset:scan + entry_size]
+            null_idx = candidate.find(b'\x00')
+            if null_idx < 3:
+                continue
+            name = candidate[:null_idx]
+            if all(32 <= b <= 126 for b in name) and len(name) >= 3:
+                # Verify next entry also has a name
+                next_candidate = data[scan + entry_size + name_offset:
+                                      scan + 2 * entry_size]
+                next_null = next_candidate.find(b'\x00')
+                if next_null >= 3:
+                    next_name = next_candidate[:next_null]
+                    if all(32 <= b <= 126 for b in next_name):
+                        # Found the parameter table
+                        table_start = scan
+                        while table_start < len(data) - entry_size:
+                            entry = data[table_start:table_start + entry_size]
+                            name_bytes = entry[name_offset:]
+                            ni = name_bytes.find(b'\x00')
+                            if ni < 2:
+                                break
+                            pname = name_bytes[:ni].decode('ascii',
+                                                           errors='ignore')
+                            if not all(32 <= b <= 126 for b in
+                                       name_bytes[:ni]):
+                                break
+
+                            # Determine type from value patterns
+                            raw_val = struct.unpack('<I', entry[0:4])[0]
+                            ptype = 'int'
+                            default = raw_val
+
+                            # Color values (common in indicator params)
+                            pname_lower = pname.lower()
+                            if 'color' in pname_lower:
+                                ptype = 'color'
+                                default = f"0x{raw_val:06X}"
+                            elif 'show' in pname_lower or 'use' in pname_lower:
+                                ptype = 'bool'
+                                default = bool(raw_val)
+                            elif 'lot' in pname_lower or 'risk' in pname_lower:
+                                ptype = 'double'
+                                default = struct.unpack('<f', entry[0:4])[0]
+                                default = round(default, 4)
+
+                            params.append({
+                                'name': pname,
+                                'type': ptype,
+                                'default': default,
+                            })
+                            table_start += entry_size
+                        break
+
+        return params
 
     # -- PE header ------------------------------------------------------------
 
@@ -451,7 +628,10 @@ class EX4AnalysisEngine:
             if sl.startswith('period_') or sl.startswith('mode_'):
                 continue
             # Skip strings that are too long to be parameter names
-            if len(s) > 60:
+            if len(s) > 40:
+                continue
+            # Skip strings that look like sentences/descriptions
+            if ' ' in s.strip() and len(s.strip().split()) >= 3:
                 continue
             # Generate a clean name for dedup
             clean = re.sub(r'[^a-z0-9]', '', sl)
@@ -620,8 +800,11 @@ class CodeGenerator:
     def _mql4(self, a: Dict) -> str:
         L = []
         meta = a['metadata']
-        L += self._header_box(f"Decompiled MQL4 – {meta['type']}")
+        L += self._header_box(f"Decompiled MQL4 \u2013 {meta['type']}")
         L.append(f"// Version:   {meta['version']}")
+        L.append(f"// Format:    {meta.get('format', 'Unknown')}")
+        if meta.get('build', 0) > 0:
+            L.append(f"// Build:     {meta['build']}")
         if meta.get('creation_date', 'Unknown') != 'Unknown':
             L.append(f"// Created:   {meta['creation_date']}")
         if meta.get('copyright', 'Unknown') != 'Unknown':
@@ -664,6 +847,9 @@ class CodeGenerator:
         if meta['type'] == 'Expert Advisor':
             L += self._header_box('Expert tick function')
             L += ['void OnTick()', '{']
+        elif meta['type'] == 'Script':
+            L += self._header_box('Script entry point')
+            L += ['void OnStart()', '{']
         else:
             L += self._header_box('Indicator calculation')
             L += ['int start()', '{']
@@ -758,6 +944,17 @@ class CodeGenerator:
             L.append('    if(PositionsTotal() < 1) {')
             L.append('        trade.Buy(0.1, _Symbol);')
             L.append('    }')
+            L.append('}')
+        elif meta['type'] == 'Script':
+            L.append('void OnStart()')
+            L.append('{')
+            L.append('    // Script execution logic')
+            L.append('    Print("Script started");')
+            for ind in a.get('indicators_detected', []):
+                n = ind['name']
+                if n == 'iMA':
+                    L.append('    int ma_handle = iMA(_Symbol, PERIOD_CURRENT, 14, 0, MODE_SMA, PRICE_CLOSE);')
+            L.append('    Print("Script completed");')
             L.append('}')
         else:
             L.append('int OnCalculate(const int rates_total,')
@@ -972,14 +1169,19 @@ class CodeGenerator:
         L.append('FILE INFORMATION')
         L.append('-' * W)
         L.append(f"  Filename:      {a.get('filename', 'N/A')}")
+        L.append(f"  Format:        {meta.get('format', 'Unknown')}")
         L.append(f"  Type:          {meta['type']}")
         L.append(f"  Version:       {meta['version']}")
+        if meta.get('build', 0) > 0:
+            L.append(f"  Build:         {meta['build']}")
         if meta.get('creation_date', 'Unknown') != 'Unknown':
             L.append(f"  Created:       {meta['creation_date']}")
         if meta.get('copyright', 'Unknown') != 'Unknown':
             L.append(f"  Copyright:     {meta['copyright']}")
         if meta.get('author', 'Unknown') != 'Unknown':
             L.append(f"  Author:        {meta['author']}")
+        if meta.get('link', 'Unknown') != 'Unknown':
+            L.append(f"  Link:          {meta['link']}")
         L.append(f"  Size:          {stats.get('file_size_kb', 0)} KB")
         L.append(f"  Entropy:       {stats.get('entropy', 0)}")
         L.append('')
@@ -1072,20 +1274,59 @@ class CodeGenerator:
 # GUI Application
 # ---------------------------------------------------------------------------
 
-# Color palette
-DARK_BG = "#1a1a2e"
-DARK_SURFACE = "#16213e"
-DARK_CARD = "#0f3460"
-ACCENT = "#e94560"
-ACCENT_HOVER = "#ff6b81"
-TEXT_PRIMARY = "#eaeaea"
-TEXT_SECONDARY = "#a0a0b0"
-SUCCESS = "#2ed573"
-WARNING = "#ffa502"
-CODE_BG = "#0d1117"
-CODE_FG = "#c9d1d9"
-SIDEBAR_BG = "#0f1629"
-SIDEBAR_ACTIVE = "#1a2744"
+# Color palette based on #FAF3E1 #F5E7C6 #FA8112 #222222
+THEMES = {
+    'dark': {
+        'bg_primary': '#222222',
+        'bg_secondary': '#2d2d2d',
+        'bg_card': '#383838',
+        'accent': '#FA8112',
+        'accent_hover': '#FB9A3E',
+        'text_primary': '#FAF3E1',
+        'text_secondary': '#F5E7C6',
+        'success': '#4CAF50',
+        'warning': '#FF9800',
+        'code_bg': '#1a1a1a',
+        'code_fg': '#FAF3E1',
+        'sidebar_bg': '#1a1a1a',
+        'sidebar_active': '#333333',
+    },
+    'light': {
+        'bg_primary': '#FAF3E1',
+        'bg_secondary': '#F5E7C6',
+        'bg_card': '#EEDEBA',
+        'accent': '#FA8112',
+        'accent_hover': '#E0700A',
+        'text_primary': '#222222',
+        'text_secondary': '#444444',
+        'success': '#2E7D32',
+        'warning': '#E65100',
+        'code_bg': '#FFFFFF',
+        'code_fg': '#222222',
+        'sidebar_bg': '#F0DEB0',
+        'sidebar_active': '#E8D4A0',
+    },
+}
+
+# Unicode symbols for icons (cross-platform, no emoji)
+ICON_OPEN = "\u25B6"       # Black right-pointing triangle
+ICON_ANALYZE = "\u25C9"    # Fisheye
+ICON_EXPORT = "\u2913"     # Downwards arrow to bar
+ICON_JSON = "\u2261"       # Identical to (three lines)
+ICON_FILE = "\u2637"       # Trigram
+ICON_THEME = "\u263E"      # Last quarter moon
+
+
+def _detect_os_theme() -> str:
+    """Detect OS-level dark/light theme preference."""
+    try:
+        import darkdetect
+        mode = darkdetect.theme()
+        if mode and mode.lower() == 'light':
+            return 'light'
+    except Exception:
+        pass
+    return 'dark'
 
 
 class SidebarButton(ctk.CTkButton):
@@ -1094,8 +1335,12 @@ class SidebarButton(ctk.CTkButton):
     def __init__(self, master, text, icon="", command=None, **kw):
         super().__init__(
             master, text=f"  {icon}  {text}", command=command,
-            fg_color="transparent", text_color=TEXT_SECONDARY,
-            hover_color=SIDEBAR_ACTIVE, anchor="w",
+            fg_color="transparent",
+            text_color=kw.pop('text_color',
+                              THEMES['dark']['text_secondary']),
+            hover_color=kw.pop('hover_color',
+                               THEMES['dark']['sidebar_active']),
+            anchor="w",
             font=ctk.CTkFont(size=14), height=44, corner_radius=8, **kw)
 
 
@@ -1106,11 +1351,14 @@ class EX4StudioApp(ctk.CTk):
     HEIGHT = 820
 
     def __init__(self):
-        super().__init__()
-        ctk.set_appearance_mode("dark")
+        # Detect OS theme and set appearance before creating window
+        self._theme_name = _detect_os_theme()
+        ctk.set_appearance_mode("dark" if self._theme_name == 'dark' else "light")
         ctk.set_default_color_theme("blue")
 
-        self.title("EX4 Reverse Engineering Studio")
+        super().__init__()
+
+        self.title("EX4 Studio")
         self.geometry(f"{self.WIDTH}x{self.HEIGHT}")
         self.minsize(1024, 680)
 
@@ -1122,6 +1370,18 @@ class EX4StudioApp(ctk.CTk):
 
         self._build_ui()
 
+    @property
+    def T(self) -> Dict:
+        """Current theme colors."""
+        return THEMES[self._theme_name]
+
+    def _set_theme_mode(self):
+        if self._theme_name == 'dark':
+            ctk.set_appearance_mode("dark")
+        else:
+            ctk.set_appearance_mode("light")
+        ctk.set_default_color_theme("blue")
+
     # -- UI construction ------------------------------------------------------
 
     def _build_ui(self):
@@ -1132,7 +1392,8 @@ class EX4StudioApp(ctk.CTk):
         self._build_sidebar()
 
         # Main content area
-        self.main_frame = ctk.CTkFrame(self, fg_color=DARK_BG, corner_radius=0)
+        self.main_frame = ctk.CTkFrame(self, fg_color=self.T['bg_primary'],
+                                        corner_radius=0)
         self.main_frame.grid(row=0, column=1, sticky="nsew")
         self.main_frame.grid_columnconfigure(0, weight=1)
         self.main_frame.grid_rowconfigure(1, weight=1)
@@ -1141,17 +1402,18 @@ class EX4StudioApp(ctk.CTk):
         self._build_header()
 
         # Content notebook area
-        self.content = ctk.CTkFrame(self.main_frame, fg_color=DARK_BG)
+        self.content = ctk.CTkFrame(self.main_frame,
+                                     fg_color=self.T['bg_primary'])
         self.content.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 8))
         self.content.grid_columnconfigure(0, weight=1)
         self.content.grid_rowconfigure(0, weight=1)
 
         # Tab view
         self.tabview = ctk.CTkTabview(
-            self.content, fg_color=DARK_SURFACE,
-            segmented_button_fg_color=DARK_CARD,
-            segmented_button_selected_color=ACCENT,
-            segmented_button_unselected_color=DARK_CARD,
+            self.content, fg_color=self.T['bg_secondary'],
+            segmented_button_fg_color=self.T['bg_card'],
+            segmented_button_selected_color=self.T['accent'],
+            segmented_button_unselected_color=self.T['bg_card'],
             corner_radius=12)
         self.tabview.grid(row=0, column=0, sticky="nsew")
 
@@ -1174,67 +1436,109 @@ class EX4StudioApp(ctk.CTk):
         self._show_welcome()
 
     def _build_sidebar(self):
-        sidebar = ctk.CTkFrame(self, width=220, fg_color=SIDEBAR_BG,
-                               corner_radius=0)
-        sidebar.grid(row=0, column=0, sticky="nsew")
-        sidebar.grid_propagate(False)
+        self.sidebar = ctk.CTkFrame(self, width=220,
+                                     fg_color=self.T['sidebar_bg'],
+                                     corner_radius=0)
+        self.sidebar.grid(row=0, column=0, sticky="nsew")
+        self.sidebar.grid_propagate(False)
 
         # Logo area
-        logo_frame = ctk.CTkFrame(sidebar, fg_color="transparent", height=80)
+        logo_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent",
+                                   height=80)
         logo_frame.pack(fill="x", padx=12, pady=(20, 8))
         logo_frame.pack_propagate(False)
 
         ctk.CTkLabel(logo_frame, text="EX4 Studio",
                      font=ctk.CTkFont(size=22, weight="bold"),
-                     text_color=ACCENT).pack(pady=(8, 0))
-        ctk.CTkLabel(logo_frame, text="Reverse Engineering",
+                     text_color=self.T['accent']).pack(pady=(8, 0))
+        ctk.CTkLabel(logo_frame, text="Binary Analyzer",
                      font=ctk.CTkFont(size=11),
-                     text_color=TEXT_SECONDARY).pack()
+                     text_color=self.T['text_secondary']).pack()
 
-        ctk.CTkFrame(sidebar, height=1, fg_color=DARK_CARD).pack(
+        ctk.CTkFrame(self.sidebar, height=1,
+                     fg_color=self.T['bg_card']).pack(
             fill="x", padx=16, pady=12)
 
         # Navigation buttons
-        SidebarButton(sidebar, "Open File", icon="\U0001F4C2",
-                      command=self.open_file).pack(fill="x", padx=12, pady=2)
-        SidebarButton(sidebar, "Analyze", icon="\U0001F50D",
-                      command=self._run_analysis).pack(fill="x", padx=12, pady=2)
+        SidebarButton(self.sidebar, "Open File", icon=ICON_OPEN,
+                      command=self.open_file,
+                      text_color=self.T['text_secondary'],
+                      hover_color=self.T['sidebar_active']).pack(
+            fill="x", padx=12, pady=2)
+        SidebarButton(self.sidebar, "Analyze", icon=ICON_ANALYZE,
+                      command=self._run_analysis,
+                      text_color=self.T['text_secondary'],
+                      hover_color=self.T['sidebar_active']).pack(
+            fill="x", padx=12, pady=2)
 
-        ctk.CTkFrame(sidebar, height=1, fg_color=DARK_CARD).pack(
+        ctk.CTkFrame(self.sidebar, height=1,
+                     fg_color=self.T['bg_card']).pack(
             fill="x", padx=16, pady=12)
 
         # Language selector
-        ctk.CTkLabel(sidebar, text="Target Language",
+        ctk.CTkLabel(self.sidebar, text="Target Language",
                      font=ctk.CTkFont(size=12, weight="bold"),
-                     text_color=TEXT_SECONDARY).pack(padx=16, anchor="w")
+                     text_color=self.T['text_secondary']).pack(
+            padx=16, anchor="w")
         self.lang_var = ctk.StringVar(value="MQL4")
         self.lang_menu = ctk.CTkOptionMenu(
-            sidebar, values=["MQL4", "MQL5", "Python", "C", "R", "Text"],
+            self.sidebar,
+            values=["MQL4", "MQL5", "Python", "C", "R", "Text"],
             variable=self.lang_var, command=self._on_language_change,
-            fg_color=DARK_CARD, button_color=ACCENT,
-            button_hover_color=ACCENT_HOVER, width=180)
+            fg_color=self.T['bg_card'],
+            button_color=self.T['accent'],
+            button_hover_color=self.T['accent_hover'], width=180)
         self.lang_menu.pack(padx=16, pady=(4, 12))
 
-        ctk.CTkFrame(sidebar, height=1, fg_color=DARK_CARD).pack(
+        ctk.CTkFrame(self.sidebar, height=1,
+                     fg_color=self.T['bg_card']).pack(
             fill="x", padx=16, pady=4)
 
         # Export buttons
-        SidebarButton(sidebar, "Export Code", icon="\U0001F4BE",
-                      command=self._export_code).pack(fill="x", padx=12, pady=2)
-        SidebarButton(sidebar, "Export JSON", icon="\U0001F4CB",
-                      command=self._export_json).pack(fill="x", padx=12, pady=2)
+        SidebarButton(self.sidebar, "Export Code", icon=ICON_EXPORT,
+                      command=self._export_code,
+                      text_color=self.T['text_secondary'],
+                      hover_color=self.T['sidebar_active']).pack(
+            fill="x", padx=12, pady=2)
+        SidebarButton(self.sidebar, "Export JSON", icon=ICON_JSON,
+                      command=self._export_json,
+                      text_color=self.T['text_secondary'],
+                      hover_color=self.T['sidebar_active']).pack(
+            fill="x", padx=12, pady=2)
+
+        ctk.CTkFrame(self.sidebar, height=1,
+                     fg_color=self.T['bg_card']).pack(
+            fill="x", padx=16, pady=4)
+
+        # Theme toggle
+        theme_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        theme_frame.pack(fill="x", padx=16, pady=4)
+        ctk.CTkLabel(theme_frame, text=f"{ICON_THEME}  Theme",
+                     font=ctk.CTkFont(size=12),
+                     text_color=self.T['text_secondary']).pack(
+            side="left")
+        self.theme_switch = ctk.CTkSwitch(
+            theme_frame, text="",
+            command=self._toggle_theme,
+            onvalue=1, offvalue=0,
+            progress_color=self.T['accent'],
+            width=40)
+        self.theme_switch.pack(side="right")
+        if self._theme_name == 'dark':
+            self.theme_switch.select()
 
         # Spacer
-        ctk.CTkFrame(sidebar, fg_color="transparent").pack(fill="both",
-                                                           expand=True)
+        ctk.CTkFrame(self.sidebar, fg_color="transparent").pack(
+            fill="both", expand=True)
 
         # Version
-        ctk.CTkLabel(sidebar, text="v2.0.0",
+        ctk.CTkLabel(self.sidebar, text="v3.0.0",
                      font=ctk.CTkFont(size=10),
-                     text_color=TEXT_SECONDARY).pack(pady=8)
+                     text_color=self.T['text_secondary']).pack(pady=8)
 
     def _build_header(self):
-        header = ctk.CTkFrame(self.main_frame, fg_color=DARK_SURFACE,
+        header = ctk.CTkFrame(self.main_frame,
+                              fg_color=self.T['bg_secondary'],
                               height=64, corner_radius=0)
         header.grid(row=0, column=0, sticky="ew", padx=0, pady=0)
         header.grid_propagate(False)
@@ -1242,12 +1546,14 @@ class EX4StudioApp(ctk.CTk):
 
         self.file_label = ctk.CTkLabel(
             header, text="No file loaded",
-            font=ctk.CTkFont(size=14), text_color=TEXT_SECONDARY)
+            font=ctk.CTkFont(size=14),
+            text_color=self.T['text_secondary'])
         self.file_label.grid(row=0, column=0, padx=20, pady=16, sticky="w")
 
         self.info_label = ctk.CTkLabel(
             header, text="",
-            font=ctk.CTkFont(size=12), text_color=TEXT_SECONDARY)
+            font=ctk.CTkFont(size=12),
+            text_color=self.T['text_secondary'])
         self.info_label.grid(row=0, column=1, padx=20, pady=16, sticky="e")
 
     def _build_overview_tab(self):
@@ -1256,8 +1562,8 @@ class EX4StudioApp(ctk.CTk):
         tab.grid_rowconfigure(0, weight=1)
         self.overview_text = ctk.CTkTextbox(
             tab, font=ctk.CTkFont(family="Consolas", size=13),
-            fg_color=CODE_BG, text_color=CODE_FG, corner_radius=8,
-            wrap="word")
+            fg_color=self.T['code_bg'], text_color=self.T['code_fg'],
+            corner_radius=8, wrap="word")
         self.overview_text.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
 
     def _build_code_tab(self):
@@ -1266,48 +1572,52 @@ class EX4StudioApp(ctk.CTk):
         tab.grid_rowconfigure(0, weight=1)
         self.code_text = ctk.CTkTextbox(
             tab, font=ctk.CTkFont(family="Consolas", size=13),
-            fg_color=CODE_BG, text_color=CODE_FG, corner_radius=8,
-            wrap="none")
+            fg_color=self.T['code_bg'], text_color=self.T['code_fg'],
+            corner_radius=8, wrap="none")
         self.code_text.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
 
     def _build_disasm_tab(self):
         tab = self.tabview.tab("Disassembly")
         tab.grid_columnconfigure(0, weight=1)
         tab.grid_rowconfigure(0, weight=1)
+        disasm_fg = "#7ee787" if self._theme_name == 'dark' else "#1B5E20"
         self.disasm_text = ctk.CTkTextbox(
             tab, font=ctk.CTkFont(family="Consolas", size=12),
-            fg_color=CODE_BG, text_color="#7ee787", corner_radius=8,
-            wrap="none")
+            fg_color=self.T['code_bg'], text_color=disasm_fg,
+            corner_radius=8, wrap="none")
         self.disasm_text.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
 
     def _build_strings_tab(self):
         tab = self.tabview.tab("Strings")
         tab.grid_columnconfigure(0, weight=1)
         tab.grid_rowconfigure(0, weight=1)
+        strings_fg = self.T['accent']
         self.strings_text = ctk.CTkTextbox(
             tab, font=ctk.CTkFont(family="Consolas", size=12),
-            fg_color=CODE_BG, text_color="#ffa657", corner_radius=8,
-            wrap="word")
+            fg_color=self.T['code_bg'], text_color=strings_fg,
+            corner_radius=8, wrap="word")
         self.strings_text.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
 
     def _build_hex_tab(self):
         tab = self.tabview.tab("Hex View")
         tab.grid_columnconfigure(0, weight=1)
         tab.grid_rowconfigure(0, weight=1)
+        hex_fg = "#d2a8ff" if self._theme_name == 'dark' else "#6A1B9A"
         self.hex_text = ctk.CTkTextbox(
             tab, font=ctk.CTkFont(family="Consolas", size=12),
-            fg_color=CODE_BG, text_color="#d2a8ff", corner_radius=8,
-            wrap="none")
+            fg_color=self.T['code_bg'], text_color=hex_fg,
+            corner_radius=8, wrap="none")
         self.hex_text.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
 
     def _build_log_tab(self):
         tab = self.tabview.tab("Log")
         tab.grid_columnconfigure(0, weight=1)
         tab.grid_rowconfigure(0, weight=1)
+        log_fg = "#8b949e" if self._theme_name == 'dark' else "#555555"
         self.log_text = ctk.CTkTextbox(
             tab, font=ctk.CTkFont(family="Consolas", size=11),
-            fg_color=CODE_BG, text_color="#8b949e", corner_radius=8,
-            wrap="word")
+            fg_color=self.T['code_bg'], text_color=log_fg,
+            corner_radius=8, wrap="word")
         self.log_text.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
 
         # Hook logger
@@ -1328,37 +1638,60 @@ class EX4StudioApp(ctk.CTk):
         logger.addHandler(h)
 
     def _build_status_bar(self):
-        bar = ctk.CTkFrame(self.main_frame, height=32, fg_color=DARK_CARD,
-                           corner_radius=0)
+        bar = ctk.CTkFrame(self.main_frame, height=32,
+                           fg_color=self.T['bg_card'], corner_radius=0)
         bar.grid(row=2, column=0, sticky="ew")
         bar.grid_propagate(False)
         self.status_label = ctk.CTkLabel(
             bar, text="Ready", font=ctk.CTkFont(size=12),
-            text_color=TEXT_SECONDARY)
+            text_color=self.T['text_secondary'])
         self.status_label.pack(side="left", padx=16)
+
+    # -- Theme toggle ---------------------------------------------------------
+
+    def _toggle_theme(self):
+        if self._theme_name == 'dark':
+            self._theme_name = 'light'
+        else:
+            self._theme_name = 'dark'
+        self._set_theme_mode()
+        # Rebuild entire UI with new theme
+        for widget in self.winfo_children():
+            widget.destroy()
+        self._build_ui()
+        # Re-populate if analysis data exists
+        if self.current_analysis:
+            self._populate_overview(self.current_analysis)
+            self._populate_code(self.current_analysis)
+            self._populate_disasm(self.current_analysis)
+            self._populate_strings(self.current_analysis)
+            self._populate_hex()
 
     # -- Welcome screen -------------------------------------------------------
 
     def _show_welcome(self):
         welcome = (
-            "╔══════════════════════════════════════════════════════════════╗\n"
-            "║           EX4 REVERSE ENGINEERING STUDIO  v2.0             ║\n"
-            "╠══════════════════════════════════════════════════════════════╣\n"
-            "║                                                            ║\n"
-            "║  Features:                                                 ║\n"
-            "║  • Binary pattern recognition (60+ patterns)               ║\n"
-            "║  • x86 disassembly via Capstone engine                     ║\n"
-            "║  • PE header analysis                                      ║\n"
-            "║  • ASCII + UTF-16LE string extraction                      ║\n"
-            "║  • Trading strategy & indicator detection                  ║\n"
-            "║  • Risk management analysis                                ║\n"
-            "║  • Multi-language code generation:                         ║\n"
-            "║      MQL4 · MQL5 · Python · C · R · Text                  ║\n"
-            "║  • Hex viewer for binary inspection                        ║\n"
-            "║  • JSON export for further processing                      ║\n"
-            "║                                                            ║\n"
-            "║  Click 'Open File' in the sidebar to begin.                ║\n"
-            "╚══════════════════════════════════════════════════════════════╝\n"
+            "\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557\n"
+            "\u2551               EX4 STUDIO  v3.0                        \u2551\n"
+            "\u2560\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2563\n"
+            "\u2551                                                            \u2551\n"
+            "\u2551  Features:                                                 \u2551\n"
+            "\u2551  \u2022 EX4 header analysis (legacy & modern formats)          \u2551\n"
+            "\u2551  \u2022 Binary pattern recognition (60+ patterns)               \u2551\n"
+            "\u2551  \u2022 x86 disassembly via Capstone engine                     \u2551\n"
+            "\u2551  \u2022 PE header analysis                                      \u2551\n"
+            "\u2551  \u2022 ASCII + UTF-16LE string extraction                      \u2551\n"
+            "\u2551  \u2022 Trading strategy & indicator detection                  \u2551\n"
+            "\u2551  \u2022 Input parameter extraction                              \u2551\n"
+            "\u2551  \u2022 Risk management analysis                                \u2551\n"
+            "\u2551  \u2022 Multi-language code generation:                         \u2551\n"
+            "\u2551      MQL4 \u00b7 MQL5 \u00b7 Python \u00b7 C \u00b7 R \u00b7 Text                  \u2551\n"
+            "\u2551  \u2022 Hex viewer for binary inspection                        \u2551\n"
+            "\u2551  \u2022 JSON export for further processing                      \u2551\n"
+            "\u2551  \u2022 Light / Dark theme with OS detection                    \u2551\n"
+            "\u2551                                                            \u2551\n"
+            "\u2551  Click 'Open File' in the sidebar to begin.                \u2551\n"
+            "\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d\n"
         )
         self.overview_text.insert("end", welcome)
 
@@ -1375,12 +1708,12 @@ class EX4StudioApp(ctk.CTk):
             with open(path, 'rb') as f:
                 self.raw_data = f.read()
             self.file_label.configure(
-                text=f"\U0001F4C4  {os.path.basename(path)}",
-                text_color=TEXT_PRIMARY)
+                text=f"{ICON_FILE}  {os.path.basename(path)}",
+                text_color=self.T['text_primary'])
             size_kb = round(len(self.raw_data) / 1024, 1)
             self.info_label.configure(text=f"{size_kb} KB")
             self._filepath = path
-            self._set_status(f"Loaded {os.path.basename(path)} – click Analyze")
+            self._set_status(f"Loaded {os.path.basename(path)} \u2013 click Analyze")
             logger.info("File loaded: %s (%d bytes)", path, len(self.raw_data))
             # Auto-analyze
             self._run_analysis()
@@ -1456,14 +1789,19 @@ class EX4StudioApp(ctk.CTk):
         lines.append(f"  FILE: {a.get('filename', 'N/A')}")
         lines.append(f"{'═' * 60}")
         lines.append("")
+        lines.append(f"  Format:       {meta.get('format', 'Unknown')}")
         lines.append(f"  Type:         {meta['type']}")
         lines.append(f"  Version:      {meta['version']}")
+        if meta.get('build', 0) > 0:
+            lines.append(f"  Build:        {meta['build']}")
         lines.append(f"  Size:         {stats.get('file_size_kb', 0)} KB")
         lines.append(f"  Entropy:      {stats.get('entropy', 0)}")
         if meta.get('copyright', 'Unknown') != 'Unknown':
             lines.append(f"  Copyright:    {meta['copyright']}")
         if meta.get('author', 'Unknown') != 'Unknown':
             lines.append(f"  Author:       {meta['author']}")
+        if meta.get('link', 'Unknown') != 'Unknown':
+            lines.append(f"  Link:         {meta['link']}")
         lines.append("")
 
         if pe.get('valid_pe'):
@@ -1544,33 +1882,75 @@ class EX4StudioApp(ctk.CTk):
     def _populate_disasm(self, a: Dict):
         self.disasm_text.delete("0.0", "end")
         dis = a.get('disassembly', {})
+        meta = a.get('metadata', {})
+
+        # Always show file format info
+        lines = []
+        lines.append(f"{'─' * 50}")
+        lines.append(f"  Binary Analysis: {a.get('filename', 'N/A')}")
+        lines.append(f"  Format: {meta.get('format', 'Unknown')}")
+        lines.append(f"  Type: {meta.get('type', 'Unknown')}")
+        if meta.get('build', 0) > 0:
+            lines.append(f"  Build: {meta['build']}")
+        lines.append(f"{'─' * 50}")
+        lines.append("")
+
         if dis.get('error'):
-            self.disasm_text.insert("end", f"[!] {dis['error']}\n")
-            return
+            lines.append(f"[!] {dis['error']}")
+            lines.append("")
+
         funcs = dis.get('functions', [])
-        if not funcs:
-            self.disasm_text.insert("end", "[i] No function prologues detected\n")
-            return
-        for fn in funcs:
-            self.disasm_text.insert(
-                "end",
-                f"\n{'─' * 50}\n"
-                f"Function @ {fn['start']} – {fn['end']}  "
-                f"({fn['size']} bytes)\n"
-                f"{'─' * 50}\n")
-            for ins in fn['instructions']:
-                self.disasm_text.insert("end", f"  {ins}\n")
+        if funcs:
+            lines.append(f"  Functions detected: {len(funcs)}")
+            lines.append(f"  Total instructions: {dis.get('total_instructions', 0)}")
+            lines.append("")
+            for fn in funcs:
+                lines.append(f"{'─' * 50}")
+                lines.append(f"  Function @ {fn['start']} \u2013 {fn['end']}  "
+                             f"({fn['size']} bytes)")
+                lines.append(f"{'─' * 50}")
+                for ins in fn['instructions']:
+                    lines.append(f"    {ins}")
+                lines.append("")
+        else:
+            if 'encrypted' in meta.get('format', '').lower():
+                lines.append("  [i] Content is encrypted (modern EX4 format)")
+                lines.append("      x86 function prologues not directly visible")
+                lines.append("      String extraction and pattern analysis used instead")
+            else:
+                lines.append("  [i] No standard x86 function prologues detected")
+            lines.append("")
+
+        # Show binary statistics
+        stats = a.get('statistics', {})
+        lines.append(f"{'─' * 50}")
+        lines.append("  BINARY STATISTICS")
+        lines.append(f"{'─' * 50}")
+        lines.append(f"  File size:     {stats.get('file_size_kb', 0)} KB")
+        lines.append(f"  Entropy:       {stats.get('entropy', 0)}")
+        lines.append(f"  Has MZ header: {stats.get('has_mz_header', False)}")
+        lines.append(f"  Total strings: {stats.get('total_strings', 0)}")
+        lines.append(f"  Patterns:      {len(a.get('patterns', []))}")
+
+        self.disasm_text.insert("end", "\n".join(lines))
 
     def _populate_strings(self, a: Dict):
         self.strings_text.delete("0.0", "end")
         cats = a.get('string_categories', {})
+        has_content = False
         for cat_name, items in cats.items():
             if items:
+                has_content = True
                 self.strings_text.insert(
                     "end", f"\n{'─' * 40}\n  {cat_name.upper()} "
                            f"({len(items)})\n{'─' * 40}\n")
                 for s in items:
                     self.strings_text.insert("end", f"  {s}\n")
+
+        if not has_content:
+            self.strings_text.insert(
+                "end", "  No categorized strings found.\n"
+                "  Load and analyze an EX4 file to see extracted strings.\n")
 
     def _populate_hex(self, max_bytes: int = 4096):
         self.hex_text.delete("0.0", "end")
