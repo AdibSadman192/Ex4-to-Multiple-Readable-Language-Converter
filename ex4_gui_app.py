@@ -1351,11 +1351,12 @@ class EX4StudioApp(ctk.CTk):
     HEIGHT = 820
 
     def __init__(self):
-        super().__init__()
-
-        # Detect OS theme
+        # Detect OS theme and set appearance before creating window
         self._theme_name = _detect_os_theme()
-        self._apply_appearance_mode()
+        ctk.set_appearance_mode("dark" if self._theme_name == 'dark' else "light")
+        ctk.set_default_color_theme("blue")
+
+        super().__init__()
 
         self.title("EX4 Studio")
         self.geometry(f"{self.WIDTH}x{self.HEIGHT}")
@@ -1374,7 +1375,7 @@ class EX4StudioApp(ctk.CTk):
         """Current theme colors."""
         return THEMES[self._theme_name]
 
-    def _apply_appearance_mode(self):
+    def _set_theme_mode(self):
         if self._theme_name == 'dark':
             ctk.set_appearance_mode("dark")
         else:
@@ -1653,7 +1654,7 @@ class EX4StudioApp(ctk.CTk):
             self._theme_name = 'light'
         else:
             self._theme_name = 'dark'
-        self._apply_appearance_mode()
+        self._set_theme_mode()
         # Rebuild entire UI with new theme
         for widget in self.winfo_children():
             widget.destroy()
