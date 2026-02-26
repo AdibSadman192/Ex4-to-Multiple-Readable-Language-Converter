@@ -23,15 +23,15 @@ pip install -r requirements.txt
 ```
 
 The requirements.txt includes:
-- PyQt5 (5.15.11) - GUI framework
-- pandas (2.3.3+) - Data analysis
-- numpy (1.26.4+) - Numerical computing
+- customtkinter (5.2.0+) - Modern GUI framework
+- pandas (2.0.0+) - Data analysis
+- numpy (1.26.0+) - Numerical computing
 - capstone (5.0.6) - Disassembly engine
 - networkx (3.6.1) - Control flow analysis
 
-3. Run the main decompiler:
+3. Run the GUI application:
 ```bash
-python ex4_debug_decompiler.py
+python ex4_gui_app.py
 ```
 
 ## Usage

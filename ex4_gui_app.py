@@ -1544,7 +1544,11 @@ class EX4StudioApp(ctk.CTk):
             self.content, fg_color=BG_SECONDARY,
             segmented_button_fg_color=BG_SECONDARY,
             segmented_button_selected_color=ACCENT,
-            segmented_button_unselected_color=BG_SECONDARY,
+            segmented_button_selected_hover_color=ACCENT_HOVER,
+            segmented_button_unselected_color="#E8DCC0",
+            segmented_button_unselected_hover_color="#DDD0B4",
+            text_color=TEXT_PRIMARY,
+            text_color_disabled=TEXT_SECONDARY,
             corner_radius=12)
         self.tabview.grid(row=0, column=0, sticky="nsew")
 
