@@ -34,6 +34,11 @@ The requirements.txt includes:
 python ex4_debug_decompiler.py
 ```
 
+Or launch the modern GUI application:
+```bash
+python ex4_gui_app.py
+```
+
 ## Usage
 
 1. Launch the application
