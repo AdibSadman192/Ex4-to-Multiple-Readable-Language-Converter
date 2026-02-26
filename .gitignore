@@ -41,7 +41,6 @@ env/
 Thumbs.db
 
 # Project specific
-*.ex4
 *.ex5
 test_output/
 test_outputs/
