@@ -1,4 +1,5 @@
 import os
+import sys
 import struct
 import binascii
 import tkinter as tk
@@ -9,6 +10,7 @@ from datetime import datetime
 import logging
 from collections import Counter
 import math
+import argparse
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG,
@@ -1697,9 +1699,83 @@ class DebugDecompilerGUI:
                 self.status_var.set(f"✗ {error_msg}")
 
 def main():
-    root = tk.Tk()
-    app = DebugDecompilerGUI(root)
-    root.mainloop()
+    parser = argparse.ArgumentParser(
+        description='EX4 Debug Decompiler - Analyze and convert MetaTrader 4 EX4 files',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s                                    # Open GUI
+  %(prog)s path/to/file.ex4                   # Analyze file and print results to console
+  %(prog)s path/to/file.ex4 --language Python # Analyze and generate Python code
+  %(prog)s path/to/file.ex4 --output output.py # Save generated code to file
+        """
+    )
+    parser.add_argument('filepath', nargs='?', default=None,
+                        help='Path to the EX4 file to analyze')
+    parser.add_argument('-l', '--language', default='MQL4',
+                        choices=['MQL4', 'MQL5', 'Python', 'C', 'R', 'Text'],
+                        help='Target output language (default: MQL4)')
+    parser.add_argument('-o', '--output', default=None,
+                        help='Output file path (default: print to console)')
+    parser.add_argument('--no-gui', action='store_true',
+                        help='Run in CLI mode only (no GUI)')
+    
+    args = parser.parse_args()
+    
+    # CLI mode: file provided
+    if args.filepath:
+        run_cli_mode(args)
+    else:
+        # GUI mode
+        root = tk.Tk()
+        app = DebugDecompilerGUI(root)
+        root.mainloop()
+
+
+def run_cli_mode(args):
+    """Run the decompiler in command-line mode"""
+    filepath = args.filepath
+    
+    # Validate file exists
+    if not os.path.exists(filepath):
+        print(f"Error: File not found: {filepath}")
+        sys.exit(1)
+    
+    if not filepath.lower().endswith('.ex4'):
+        print(f"Warning: File does not have .ex4 extension: {filepath}")
+    
+    # Create analyzer and process file
+    analyzer = MT4Analyzer()
+    
+    print(f"Analyzing: {filepath}")
+    print(f"File size: {os.path.getsize(filepath)} bytes")
+    print("-" * 70)
+    
+    try:
+        analysis = analyzer.analyze_file(filepath)
+        analysis['filepath'] = filepath
+        
+        if 'error' in analysis and analysis['error']:
+            print(f"Error during analysis: {analysis['error']}")
+            sys.exit(1)
+        
+        # Generate pseudocode
+        pseudocode = analyzer.generate_pseudocode(analysis, args.language)
+        
+        # Output results
+        if args.output:
+            with open(args.output, 'w') as f:
+                f.write(pseudocode)
+            print(f"Code saved to: {args.output}")
+        else:
+            print(f"\nGenerated {args.language} Code:")
+            print("=" * 70)
+            print(pseudocode)
+            
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        logging.error(f"Error in CLI mode: {str(e)}", exc_info=True)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

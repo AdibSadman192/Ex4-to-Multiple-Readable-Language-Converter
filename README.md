@@ -1,204 +1,185 @@
 # EX4 Debug Decompiler
 
-A powerful tool for analyzing and converting MetaTrader 4 (MT4) EX4 files into various programming languages.
+A powerful tool for analyzing and converting MetaTrader 4 (MT4) EX4 binary files into multiple readable programming languages.
 
 ## Table of Contents
+
+- [Features](#features)
 - [Installation](#installation)
 - [Usage](#usage)
-- [Features](#features)
+- [GUI Application](#gui-application)
+- [CLI Usage](#cli-usage)
 - [Limitations](#limitations)
 - [Technical Details](#technical-details)
-
-## Installation
-
-### Prerequisites
-- Python 3.12 or higher (Python 3.8+ supported)
-- Required Python packages (see requirements.txt)
-
-### Setup
-1. Clone or download this repository
-2. Install the required dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-The requirements.txt includes:
-- PyQt5 (5.15.11) - GUI framework
-- pandas (2.3.3+) - Data analysis
-- numpy (1.26.4+) - Numerical computing
-- capstone (5.0.6) - Disassembly engine
-- networkx (3.6.1) - Control flow analysis
-
-3. Run the main decompiler:
-```bash
-python ex4_debug_decompiler.py
-```
-
-## Usage
-
-1. Launch the application
-2. Select your target language from the dropdown:
-   - MQL4 (MetaTrader 4)
-   - MQL5 (MetaTrader 5)
-   - Python
-   - C
-   - R
-   - Text (Plain description)
-
-3. Click "Select EX4 File" and choose your .ex4 file
-4. View results in three tabs:
-   - Analysis: Raw analysis data in JSON format
-   - Pseudocode: Generated code in selected language
-   - Debug Log: Detailed analysis process and any errors
-
-5. Save your results:
-   - "Save Analysis": Saves the raw analysis as JSON
-   - "Save Pseudocode": Saves the generated code in appropriate format
+- [License](#license)
 
 ## Features
 
 ### Analysis Capabilities
-- Metadata extraction
-- Pattern recognition
-- String analysis
-- Function identification
-- Trading logic analysis
-- Indicator detection
+
+- Metadata extraction from PE headers
+- Pattern recognition for MT4/MT5 function structures
+- String analysis with Unicode (UTF-16LE) support
+- Function identification and indicator detection
+- Trading logic analysis and strategy classification
+- Control flow analysis via Capstone disassembly
 
 ### Supported Output Formats
-1. **MQL4**
-   - Original MT4 format
-   - Function-based structure
-   - Native indicator calls
 
-2. **MQL5**
-   - Modern class-based structure
-   - Object-oriented approach
-   - Built-in trading classes
+| Format | Description                                       |
+| ------ | ------------------------------------------------- |
+| MQL4   | Original MT4 format with function-based structure |
+| MQL5   | Modern class-based MQL5 structure                 |
+| Python | Pandas/NumPy implementation with type hints       |
+| C      | Structured programming with custom data types     |
+| R      | Quantmod/TTR integration, functional style        |
+| Text   | Human-readable strategy documentation             |
 
-3. **Python**
-   - Pandas/Numpy implementation
-   - Class-based design
-   - Technical analysis functions
+### Additional Features
 
-4. **C**
-   - Structured programming
-   - Custom data structures
-   - Low-level implementation
+- Trading strategy detection (Martingale, Grid, Hedging, Scalping, Breakout, Trend Following)
+- Risk management pattern identification
+- Timeframe usage pattern analysis
+- Input parameter extraction with automatic type detection
+- File statistics including entropy calculation
+- String categorization for improved code generation
 
-5. **R**
-   - Quantmod/TTR integration
-   - Functional programming style
-   - Statistical analysis focus
+## Installation
 
-6. **Text**
-   - Human-readable description
-   - Strategy explanation
-   - Technical documentation
+### Prerequisites
 
-## Recent Enhancements 🎉
+- Python 3.10 or higher
+- pip package manager
 
-### Major Improvements (December 2025)
+### Setup
 
-1. **Enhanced Pattern Recognition**
-   - Expanded from 10 to 40+ MT4/MT5 function patterns
-   - Added trading strategy detection (Martingale, Grid, Hedging, Scalping, Breakout, Trend Following)
-   - Implemented risk management pattern detection
-   - Added timeframe usage pattern identification
+1. Clone or download this repository:
 
-2. **Improved Metadata Extraction**
-   - PE header analysis with accurate compilation timestamps
-   - Copyright, author, and description extraction
-   - URL/link detection
-   - File size and complexity metrics (entropy calculation)
+```bash
+git clone https://github.com/AdibSadman192/Ex4-to-Multiple-Readable-Language-Converter.git
+cd Ex4-to-Multiple-Readable-Language-Converter
+```
 
-3. **Advanced String Analysis**
-   - Unicode (UTF-16LE) support for international characters
-   - String categorization (functions, parameters, indicators, comments, etc.)
-   - Duplicate removal with order preservation
-   - Improved filtering and relevance scoring
+2. Install the required dependencies:
 
-4. **Enhanced Code Generation**
-   - **Python**: Type hints, comprehensive class structure, detailed indicator implementations
-   - **MQL4**: Professional headers, parameter inference, risk management code templates
-   - **Text**: Comprehensive 70+ line analysis reports with all metadata and statistics
-   - Context-aware parameter naming with type inference
+```bash
+pip install -r requirements.txt
+```
 
-5. **New Analysis Features**
-   - Input parameter extraction with automatic type detection
-   - Trading strategy analysis and classification
-   - Risk management feature detection
-   - File statistics including entropy, string counts, pattern counts
-   - String categorization for better code generation
+The `requirements.txt` includes:
 
-6. **Improved Error Handling**
-   - Comprehensive try-catch blocks throughout all analyzers
-   - Graceful degradation when data is missing or corrupted
-   - Better logging for debugging
-   - User-friendly error messages
+- `customtkinter==6.0.0` - Modern GUI framework
+- `capstone==5.0.9` - Disassembly engine
+- `networkx==3.6.1` - Control flow analysis
+- `numpy>=2.0.0` - Numerical computing
+- `pandas>=2.0.0` - Data analysis
+- `darkdetect==0.8.0` - OS-level theme detection
 
-### Code Quality Improvements
-- Better modular structure
-- Type hints in new code
-- Comprehensive documentation strings
-- Consistent error handling patterns
-- Extensive testing with mock EX4 files
+## Usage
+
+### GUI Application
+
+EX4 Studio is the modern graphical interface for the decompiler.
+
+**Launch the GUI:**
+
+```bash
+python ex4_gui_app.py
+```
+
+Or simply run the main entry point with no arguments:
+
+```bash
+python ex4_debug_decompiler.py
+```
+
+**Workflow:**
+
+1. Launch the application. The GUI detects your OS theme automatically and applies it.
+2. Select your target language from the sidebar dropdown (MQL4, MQL5, Python, C, R, Text).
+3. Click **Open File** (folder icon) and choose your `.ex4` file.
+4. Click **Analyze** (magnifying glass icon) to begin analysis.
+5. Review results across six tabs:
+   - **Overview** - Human-readable analysis summary
+   - **Generated Code** - Code in your selected language
+   - **Disassembly** - x86 disassembly output
+   - **Strings** - Extracted strings from the binary
+   - **Hex View** - Hexadecimal dump of the file
+   - **Log** - Detailed processing log
+6. Export results:
+   - **Export Code** - Save generated code to disk
+   - **Export JSON** - Save raw analysis data as JSON
+
+**Theme switching:** Toggle the moon/sun switch in the sidebar to switch between dark and light themes. All widgets re-color instantly with no flicker.
+
+### CLI Usage
+
+You can also use the decompiler from the command line.
+
+**Basic usage** - analyze an EX4 file and print results to the console:
+
+```bash
+python ex4_debug_decompiler.py "path/to/file.ex4"
+```
+
+**Specify output language:**
+
+```bash
+python ex4_debug_decompiler.py "path/to/file.ex4" --language Python
+```
+
+**Save output to a file:**
+
+```bash
+python ex4_debug_decompiler.py "path/to/file.ex4" --output output.py
+```
+
+**Generate in different languages:**
+
+```bash
+python ex4_debug_decompiler.py "path/to/file.ex4" --language MQL5
+python ex4_debug_decompiler.py "path/to/file.ex4" --language C
+python ex4_debug_decompiler.py "path/to/file.ex4" --language Text
+```
+
+#### CLI Options
+
+| Option           | Description                                           |
+| ---------------- | ----------------------------------------------------- |
+| `filepath`       | Path to the EX4 file to analyze (positional argument) |
+| `-l, --language` | Target output language (default: `MQL4`)              |
+| `-o, --output`   | Output file path (default: print to console)          |
+| `--no-gui`       | Run in CLI mode only, suppress GUI launch             |
+
+**Note:** When you provide a file path as the first argument, the tool automatically runs in CLI mode and prints results to the console. Without any arguments, it launches the GUI.
 
 ## Limitations
 
-### Resolved/Improved Limitations ✅
-1. **Pattern Recognition** ✅ IMPROVED
-   - ✅ Now includes 40+ MT4/MT5 function patterns
-   - ✅ Detects trading strategies (martingale, grid, hedging, scalping, etc.)
-   - ✅ Identifies risk management features
-   - ✅ Detects timeframe usage patterns
-   - ⚠ May still miss highly custom implementations
+### Inherent Limitations
 
-2. **Code Generation** ✅ IMPROVED
-   - ✅ Python code now includes type hints and comprehensive class structure
-   - ✅ MQL4 code includes detailed headers and comments
-   - ✅ Input parameters are inferred with correct data types
-   - ✅ Text descriptions provide comprehensive analysis reports
-   - ⚠ Generated code still requires manual review for edge cases
+- Original variable names cannot be recovered from compiled binaries
+- Original source code cannot be exactly reconstructed
+- Original comments are lost during compilation
+- Compiler optimizations are permanent and cannot be reversed
+- Complex logic may be simplified during decompilation
+- Custom indicators cannot be fully reversed
+- Proprietary functions remain obfuscated
 
-3. **Analysis Depth** ✅ IMPROVED
-   - ✅ Enhanced string extraction with Unicode (UTF-16LE) support
-   - ✅ PE header analysis extracts compilation timestamps
-   - ✅ Metadata extraction includes copyright, author, description
-   - ✅ String categorization (functions, parameters, indicators, etc.)
-   - ✅ File statistics including entropy calculation
-   - ⚠ Deep nested functions may still be flattened
+### Best Efforts
 
-### Remaining Limitations
-1. **Decompilation Accuracy** ⚠
-   - ❌ Cannot recover original variable names (inherent limitation)
-   - ❌ Complex logic may be simplified
-   - ⚠ Custom indicators detection improved but may not be fully reconstructed
-
-2. **Full Source Recovery** ❌
-   - ❌ Original source code cannot be exactly reconstructed (inherent limitation)
-   - ❌ Original comments are lost (inherent limitation)
-   - ❌ Original code structure may differ
-   - ✅ BUT: Improved parameter names and types help understand intent
-
-3. **Custom Features** ⚠
-   - ❌ Custom indicators cannot be fully reversed
-   - ❌ Proprietary functions remain obfuscated
-   - ✅ Trading logic patterns are now better detected
-
-4. **Optimization Recovery** ❌
-   - ❌ Compiler optimizations are permanent (inherent limitation)
-   - ❌ Original performance tweaks are lost (inherent limitation)
-   - ❌ Memory management patterns are simplified (inherent limitation)
+- Generated code still requires manual review for edge cases
+- Parameter names and types are inferred to help understand intent
+- Deep nested functions may be flattened
+- Custom indicator detection is improved but may not be fully reconstructed
 
 ## Technical Details
 
 ### Implementation Approach
 
 1. **Binary Analysis**
-   - Uses Capstone for disassembly
-   - Pattern matching for MT4 structures
-   - String extraction and analysis
+   - Uses Capstone for x86 disassembly
+   - Pattern matching for MT4 binary structures
+   - String extraction and categorization
 
 2. **Pattern Recognition**
    - Trading function detection
@@ -218,7 +199,7 @@ python ex4_debug_decompiler.py
    - Multi-language conversion research
 
 2. **Implementation**
-   - Python-based GUI development
+   - Python-based GUI development with CustomTkinter
    - Modular code generation system
    - Extensive error handling
 
@@ -227,3 +208,8 @@ python ex4_debug_decompiler.py
    - Cross-language verification
    - Pattern recognition validation
 
+## License
+
+This project is licensed under the [MIT License](./LICENSE) - free to use, modify, and distribute with attribution.
+
+See the [LICENSE](./LICENSE) file for the full text.

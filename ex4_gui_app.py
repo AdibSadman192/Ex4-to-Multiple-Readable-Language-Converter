@@ -1625,44 +1625,46 @@ class CodeGenerator:
 # Color palette based on #FAF3E1 #F5E7C6 #FA8112 #222222
 THEMES = {
     'dark': {
-        'bg_primary': '#222222',
-        'bg_secondary': '#2d2d2d',
-        'bg_card': '#383838',
+        'bg_primary': '#1a1a1a',
+        'bg_secondary': '#222222',
+        'bg_card': '#2d2d2d',
         'accent': '#FA8112',
         'accent_hover': '#FB9A3E',
         'text_primary': '#FAF3E1',
-        'text_secondary': '#F5E7C6',
+        'text_secondary': '#C8B793',
         'success': '#4CAF50',
         'warning': '#FF9800',
-        'code_bg': '#1a1a1a',
-        'code_fg': '#FAF3E1',
-        'sidebar_bg': '#1a1a1a',
-        'sidebar_active': '#333333',
+        'code_bg': '#121212',
+        'code_fg': '#E0E0E0',
+        'sidebar_bg': '#0f0f0f',
+        'sidebar_active': '#2a2a2a',
+        'seg_selected': '#FA8112',
     },
     'light': {
-        'bg_primary': '#FAF3E1',
-        'bg_secondary': '#F5E7C6',
-        'bg_card': '#EEDEBA',
-        'accent': '#FA8112',
-        'accent_hover': '#E0700A',
-        'text_primary': '#222222',
-        'text_secondary': '#444444',
+        'bg_primary': '#F5EFE0',
+        'bg_secondary': '#EDE0C8',
+        'bg_card': '#E0D0B0',
+        'accent': '#D45500',
+        'accent_hover': '#E06000',
+        'text_primary': '#1A1A1A',
+        'text_secondary': '#4A4030',
         'success': '#2E7D32',
-        'warning': '#E65100',
+        'warning': '#C44800',
         'code_bg': '#FFFFFF',
-        'code_fg': '#222222',
-        'sidebar_bg': '#F0DEB0',
-        'sidebar_active': '#E8D4A0',
+        'code_fg': '#1A1A1A',
+        'sidebar_bg': '#E8D8BC',
+        'sidebar_active': '#D4C0A0',
+        'seg_selected': '#FFE0B2',
     },
 }
 
-# Unicode symbols for icons (cross-platform, no emoji)
-ICON_OPEN = "\u25B6"       # Black right-pointing triangle
-ICON_ANALYZE = "\u25C9"    # Fisheye
-ICON_EXPORT = "\u2913"     # Downwards arrow to bar
-ICON_JSON = "\u2261"       # Identical to (three lines)
-ICON_FILE = "\u2637"       # Trigram
-ICON_THEME = "\u263E"      # Last quarter moon
+# Emoji icons (render reliably on Windows/macOS/Linux)
+ICON_OPEN = "📂"
+ICON_ANALYZE = "🔍"
+ICON_EXPORT = "💾"
+ICON_JSON = "📋"
+ICON_FILE = "📄"
+ICON_THEME = "🌙"
 
 
 def _detect_os_theme() -> str:
@@ -1681,13 +1683,14 @@ class SidebarButton(ctk.CTkButton):
     """Custom sidebar navigation button."""
 
     def __init__(self, master, text, icon="", command=None, **kw):
+        # Use provided colors or defaults
+        text_color = kw.pop('text_color', "#FAF3E1")
+        hover_color = kw.pop('hover_color', "#333333")
         super().__init__(
             master, text=f"  {icon}  {text}", command=command,
             fg_color="transparent",
-            text_color=kw.pop('text_color',
-                              THEMES['dark']['text_secondary']),
-            hover_color=kw.pop('hover_color',
-                               THEMES['dark']['sidebar_active']),
+            text_color=text_color,
+            hover_color=hover_color,
             anchor="w",
             font=ctk.CTkFont(size=14), height=44, corner_radius=8, **kw)
 
@@ -1760,8 +1763,9 @@ class EX4StudioApp(ctk.CTk):
         self.tabview = ctk.CTkTabview(
             self.content, fg_color=self.T['bg_secondary'],
             segmented_button_fg_color=self.T['bg_card'],
-            segmented_button_selected_color=self.T['accent'],
+            segmented_button_selected_color=self.T['seg_selected'],
             segmented_button_unselected_color=self.T['bg_card'],
+            text_color=self.T['text_primary'],
             corner_radius=12)
         self.tabview.grid(row=0, column=0, sticky="nsew")
 
@@ -1793,7 +1797,7 @@ class EX4StudioApp(ctk.CTk):
         # Logo area
         logo_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent",
                                    height=80)
-        logo_frame.pack(fill="x", padx=12, pady=(20, 8))
+        logo_frame.pack(fill="x", padx=16, pady=(20, 8))
         logo_frame.pack_propagate(False)
 
         ctk.CTkLabel(logo_frame, text="EX4 Studio",
@@ -1810,14 +1814,14 @@ class EX4StudioApp(ctk.CTk):
         # Navigation buttons
         SidebarButton(self.sidebar, "Open File", icon=ICON_OPEN,
                       command=self.open_file,
-                      text_color=self.T['text_secondary'],
+                      text_color=self.T['text_primary'],
                       hover_color=self.T['sidebar_active']).pack(
-            fill="x", padx=12, pady=2)
+            fill="x", padx=16, pady=3)
         SidebarButton(self.sidebar, "Analyze", icon=ICON_ANALYZE,
                       command=self._run_analysis,
-                      text_color=self.T['text_secondary'],
+                      text_color=self.T['text_primary'],
                       hover_color=self.T['sidebar_active']).pack(
-            fill="x", padx=12, pady=2)
+            fill="x", padx=16, pady=3)
 
         ctk.CTkFrame(self.sidebar, height=1,
                      fg_color=self.T['bg_card']).pack(
@@ -1826,8 +1830,8 @@ class EX4StudioApp(ctk.CTk):
         # Language selector
         ctk.CTkLabel(self.sidebar, text="Target Language",
                      font=ctk.CTkFont(size=12, weight="bold"),
-                     text_color=self.T['text_secondary']).pack(
-            padx=16, anchor="w")
+                     text_color=self.T['text_primary']).pack(
+            padx=16, anchor="w", pady=(0, 4))
         self.lang_var = ctk.StringVar(value="MQL4")
         self.lang_menu = ctk.CTkOptionMenu(
             self.sidebar,
@@ -1835,8 +1839,10 @@ class EX4StudioApp(ctk.CTk):
             variable=self.lang_var, command=self._on_language_change,
             fg_color=self.T['bg_card'],
             button_color=self.T['accent'],
-            button_hover_color=self.T['accent_hover'], width=180)
-        self.lang_menu.pack(padx=16, pady=(4, 12))
+            button_hover_color=self.T['accent_hover'],
+            text_color=self.T['text_primary'],
+            width=180)
+        self.lang_menu.pack(padx=16, pady=(0, 12))
 
         ctk.CTkFrame(self.sidebar, height=1,
                      fg_color=self.T['bg_card']).pack(
@@ -1845,14 +1851,14 @@ class EX4StudioApp(ctk.CTk):
         # Export buttons
         SidebarButton(self.sidebar, "Export Code", icon=ICON_EXPORT,
                       command=self._export_code,
-                      text_color=self.T['text_secondary'],
+                      text_color=self.T['text_primary'],
                       hover_color=self.T['sidebar_active']).pack(
-            fill="x", padx=12, pady=2)
+            fill="x", padx=16, pady=3)
         SidebarButton(self.sidebar, "Export JSON", icon=ICON_JSON,
                       command=self._export_json,
-                      text_color=self.T['text_secondary'],
+                      text_color=self.T['text_primary'],
                       hover_color=self.T['sidebar_active']).pack(
-            fill="x", padx=12, pady=2)
+            fill="x", padx=16, pady=3)
 
         ctk.CTkFrame(self.sidebar, height=1,
                      fg_color=self.T['bg_card']).pack(
@@ -1863,13 +1869,16 @@ class EX4StudioApp(ctk.CTk):
         theme_frame.pack(fill="x", padx=16, pady=4)
         ctk.CTkLabel(theme_frame, text=f"{ICON_THEME}  Theme",
                      font=ctk.CTkFont(size=12),
-                     text_color=self.T['text_secondary']).pack(
+                     text_color=self.T['text_primary']).pack(
             side="left")
         self.theme_switch = ctk.CTkSwitch(
             theme_frame, text="",
             command=self._toggle_theme,
             onvalue=1, offvalue=0,
             progress_color=self.T['accent'],
+            switch_width=48,
+            button_length=22,
+            button_color=self.T['accent'],
             width=40)
         self.theme_switch.pack(side="right")
         if self._theme_name == 'dark':
@@ -2002,18 +2011,143 @@ class EX4StudioApp(ctk.CTk):
             self._theme_name = 'light'
         else:
             self._theme_name = 'dark'
-        self._set_theme_mode()
-        # Rebuild entire UI with new theme
-        for widget in self.winfo_children():
-            widget.destroy()
-        self._build_ui()
-        # Re-populate if analysis data exists
-        if self.current_analysis:
-            self._populate_overview(self.current_analysis)
-            self._populate_code(self.current_analysis)
-            self._populate_disasm(self.current_analysis)
-            self._populate_strings(self.current_analysis)
-            self._populate_hex()
+        ctk.set_appearance_mode(self._theme_name)
+        self._apply_theme_to_widgets()
+
+    def _apply_theme_to_widgets(self):
+        """Update theme colors on all widgets without full rebuild."""
+        T = self.T
+
+        # Sidebar
+        self.sidebar.configure(fg_color=T['sidebar_bg'])
+        for w in self.sidebar.winfo_children():
+            self._update_widget_theme(w, T)
+
+        # Main frame
+        self.main_frame.configure(fg_color=T['bg_primary'])
+        self.content.configure(fg_color=T['bg_primary'])
+
+        # Header
+        for w in self.main_frame.winfo_children():
+            if isinstance(w, ctk.CTkFrame) and w.cget('height') == 64:
+                w.configure(fg_color=T['bg_secondary'])
+                for child in w.winfo_children():
+                    if isinstance(child, ctk.CTkLabel):
+                        child.configure(text_color=T['text_secondary'])
+
+        # Tabview - update colors (text_color is a supported CTkTabview param)
+        self.tabview.configure(
+            fg_color=T['bg_secondary'],
+            segmented_button_fg_color=T['bg_card'],
+            segmented_button_selected_color=T['seg_selected'],
+            segmented_button_unselected_color=T['bg_card'],
+            text_color=T['text_primary'])
+
+        # Text widgets
+        for attr in ['overview_text', 'code_text', 'disasm_text',
+                     'strings_text', 'hex_text', 'log_text']:
+            widget = getattr(self, attr, None)
+            if widget:
+                widget.configure(fg_color=T['code_bg'],
+                                 text_color=self._get_text_color(attr, T))
+
+        # Status bar
+        for w in self.main_frame.winfo_children():
+            if isinstance(w, ctk.CTkFrame) and w.cget('height') == 32:
+                w.configure(fg_color=T['bg_card'])
+                for child in w.winfo_children():
+                    if isinstance(child, ctk.CTkLabel):
+                        child.configure(text_color=T['text_secondary'])
+
+        # Sidebar buttons
+        for w in self.sidebar.winfo_children():
+            if isinstance(w, ctk.CTkButton):
+                w.configure(text_color=T['text_primary'],
+                            hover_color=T['sidebar_active'])
+
+        # Update status
+        self.status_label.configure(text_color=T['text_secondary'])
+        self.file_label.configure(text_color=T['text_primary'])
+
+        # Tabview text colors
+        try:
+            for tab_name in ["Overview", "Generated Code", "Disassembly",
+                             "Strings", "Hex View", "Log"]:
+                tab = self.tabview.tab(tab_name)
+                if tab:
+                    for child in tab.winfo_children():
+                        self._recolor_text_widgets(child, T)
+        except Exception:
+            pass
+
+    def _recolor_text_widgets(self, widget, T: Dict):
+        """Recursively update text widget colors, preserving per-tab colors."""
+        try:
+            if isinstance(widget, ctk.CTkTextbox):
+                # Keep the widget's existing text color (per-tab syntax colors)
+                current_fg = widget.cget('text_color')
+                if current_fg in (T['code_fg'], T['text_primary'],
+                                  T['text_secondary']):
+                    widget.configure(fg_color=T['code_bg'],
+                                     text_color=T['code_fg'])
+                else:
+                    widget.configure(fg_color=T['code_bg'])
+        except Exception:
+            pass
+        try:
+            for child in widget.winfo_children():
+                self._recolor_text_widgets(child, T)
+        except Exception:
+            pass
+
+    def _get_text_color(self, attr: str, T: Dict) -> str:
+        """Get appropriate text color for a widget based on theme."""
+        if attr == 'disasm':
+            return "#7ee787" if self._theme_name == 'dark' else "#1B5E20"
+        elif attr == 'strings':
+            return T['accent']
+        elif attr == 'hex':
+            return "#d2a8ff" if self._theme_name == 'dark' else "6A1B9A"
+        elif attr == 'log':
+            return "#8b949e" if self._theme_name == 'dark' else "555555"
+        return T['code_fg']
+
+    def _update_widget_theme(self, widget, T: Dict):
+        """Recursively update widget theme colors."""
+        try:
+            if isinstance(widget, ctk.CTkButton):
+                widget.configure(text_color=T['text_primary'],
+                                hover_color=T['sidebar_active'])
+            elif isinstance(widget, ctk.CTkLabel):
+                text = widget.cget('text')
+                if text in ["EX4 Studio", "Binary Analyzer"]:
+                    pass  # Keep logo labels as-is
+                elif text == "Target Language" or text.endswith("Theme"):
+                    widget.configure(text_color=T['text_primary'])
+                else:
+                    widget.configure(text_color=T['text_secondary'])
+            elif isinstance(widget, ctk.CTkFrame):
+                current_fg = widget.cget('fg_color')
+                if current_fg in ['#0f0f0f', '#E8D8BC']:
+                    widget.configure(fg_color=T['sidebar_bg'])
+                elif current_fg in ['#2d2d2d', '#E0D0B0']:
+                    widget.configure(fg_color=T['bg_card'])
+                elif current_fg in ['#222222', '#EDE0C8']:
+                    widget.configure(fg_color=T['bg_secondary'])
+                elif current_fg in ['#1a1a1a', '#F5EFE0']:
+                    widget.configure(fg_color=T['bg_primary'])
+        except Exception:
+            pass
+        try:
+            for child in widget.winfo_children():
+                self._update_widget_theme(child, T)
+        except Exception:
+            pass
+        try:
+            for child in widget.winfo_children():
+                self._update_widget_theme(child, T)
+        except Exception:
+            pass
 
     # -- Welcome screen -------------------------------------------------------
 

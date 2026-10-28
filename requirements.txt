@@ -1,6 +1,6 @@
-PyQt5==5.15.11
-capstone==5.0.6
+customtkinter==6.0.0
+capstone==5.0.9
 networkx==3.6.1
-numpy>=1.26.0,<2.0.0
+numpy>=2.0.0
 pandas>=2.0.0
-customtkinter>=5.2.0
+darkdetect==0.8.0
