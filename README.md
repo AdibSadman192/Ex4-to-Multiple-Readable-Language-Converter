@@ -44,6 +44,13 @@ A powerful tool for analyzing and converting MetaTrader 4 (MT4) EX4 binary files
 - File statistics including entropy calculation
 - String categorization for improved code generation
 
+### Modern EX4 (Build 600+) Support
+
+- **Modern format detection** — detects `EX-\x04` magic and build 600+ encrypted EX4 files
+- **REA Engine** — reverse-engineering analysis layer with PE section/import/export/resource parsing, MQL4 VM bytecode disassembly, control-flow graphs, call graphs, data-flow analysis, string deobfuscation, API resolution, and function-boundary detection
+- **CFB decryption** — pure-Python AES-256 + Cipher Feedback mode implementation for modern EX4 payloads (parameterized by session key; honestly reports when MetaQuotes RSA key tables are unavailable)
+- **Decrypted bytecode dumps** — load decrypted bytecode captured from a running MT4 process via x32dbg/IDA memory capture (ForexMQ5-style dynamic analysis) for full disassembly, CFG, call-graph, and data-flow analysis on build 600+ files
+
 ## Installation
 
 ### Prerequisites
@@ -98,7 +105,8 @@ python ex4_debug_decompiler.py
 1. Launch the application. The GUI detects your OS theme automatically and applies it.
 2. Select your target language from the sidebar dropdown (MQL4, MQL5, Python, C, R, Text).
 3. Click **Open File** (folder icon) and choose your `.ex4` file.
-4. Click **Analyze** (magnifying glass icon) to begin analysis.
+4. (Optional) Click **Load Decrypted Dump** (brain icon) to load a decrypted bytecode dump captured from a running MT4 process via x32dbg/IDA — this enables full MQL4 VM disassembly, CFG, call-graph, and data-flow analysis on modern (build 600+) encrypted EX4 files.
+5. Click **Analyze** (magnifying glass icon) to begin analysis.
 5. Review results across six tabs:
    - **Overview** - Human-readable analysis summary
    - **Generated Code** - Code in your selected language
@@ -142,6 +150,19 @@ python ex4_debug_decompiler.py "path/to/file.ex4" --language C
 python ex4_debug_decompiler.py "path/to/file.ex4" --language Text
 ```
 
+**Load a decrypted bytecode dump** (ForexMQ5-style dynamic analysis — capture decrypted bytecode from a running MT4 process via x32dbg/IDA, then feed it to the disassembler/CFG/call-graph/data-flow pipeline):
+
+```bash
+python ex4_debug_decompiler.py "path/to/file.ex4" --dump "path/to/dump.bin"
+```
+
+**Output full analysis as JSON** (includes REA results, modern EX4 detection, decrypted dump details):
+
+```bash
+python ex4_debug_decompiler.py "path/to/file.ex4" --json
+python ex4_debug_decompiler.py "path/to/file.ex4" --dump "path/to/dump.bin" --json --output analysis.json
+```
+
 #### CLI Options
 
 | Option           | Description                                           |
@@ -150,6 +171,8 @@ python ex4_debug_decompiler.py "path/to/file.ex4" --language Text
 | `-l, --language` | Target output language (default: `MQL4`)              |
 | `-o, --output`   | Output file path (default: print to console)          |
 | `--no-gui`       | Run in CLI mode only, suppress GUI launch             |
+| `--dump`         | Path to decrypted bytecode dump (x32dbg/IDA memory capture, ForexMQ5-style dynamic analysis) |
+| `--json`         | Output full analysis as JSON instead of pseudocode    |
 
 **Note:** When you provide a file path as the first argument, the tool automatically runs in CLI mode and prints results to the console. Without any arguments, it launches the GUI.
 

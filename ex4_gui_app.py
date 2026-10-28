@@ -39,6 +39,12 @@ except ImportError:
     HAS_NETWORKX = False
 
 try:
+    from ex4_rea_engine import REAEngine
+    HAS_REA = True
+except ImportError:
+    HAS_REA = False
+
+try:
     import numpy as np
     HAS_NUMPY = True
 except ImportError:
@@ -204,11 +210,19 @@ class EX4AnalysisEngine:
             self.cs.detail = False
         else:
             self.cs = None
+        self.rea = REAEngine() if HAS_REA else None
 
     # -- top-level entry point ------------------------------------------------
 
-    def analyze(self, filepath: str) -> Dict:
-        """Full analysis pipeline."""
+    def analyze(self, filepath: str,
+                decrypted_bytecode: Optional[bytes] = None) -> Dict:
+        """Full analysis pipeline.
+
+        If ``decrypted_bytecode`` is supplied (a memory dump captured from a
+        running MT4 process via x32dbg/IDA — ForexMQ5-style dynamic analysis),
+        it is disassembled and fed through CFG/call-graph/data-flow analysis
+        in place of the encrypted payload.
+        """
         logger.info("Starting analysis of %s", filepath)
         with open(filepath, 'rb') as fh:
             data = fh.read()
@@ -288,6 +302,8 @@ class EX4AnalysisEngine:
             'event_handlers': handlers,
             'trading_functions': trading_funcs,
             'indicators_detected': indicators,
+            'indicator_properties': self._analyze_indicator_properties(
+                data, strings),
             'buffer_functions': self._find_buffer_functions(data),
             'input_parameters': input_params,
             'trading_strategy': self._analyze_strategy(data),
@@ -296,9 +312,110 @@ class EX4AnalysisEngine:
             'disassembly': self._disassemble(data),
             'statistics': self._statistics(data, strings, string_sources),
         }
+
+        # --- REA engine integration (reverse-engineering-grade analysis) ---
+        rea_result = {}
+        if self.rea is not None:
+            try:
+                rea_result = self.rea.analyze(filepath)
+            except Exception as e:
+                logger.error("REA engine error: %s", e, exc_info=True)
+                rea_result = {}
+        result['rea'] = rea_result
+
+        # Enrich core fields from REA findings where they add signal
+        pe = rea_result.get('pe_info', {})
+        if pe and pe.get('valid'):
+            result['pe_info'].update({
+                'sections': pe.get('sections', []),
+                'imports': pe.get('imports', []),
+                'exports': pe.get('exports', []),
+                'resources': pe.get('resources', []),
+                'overlay_size': pe.get('overlay_size', 0),
+                'entropy_map': pe.get('entropy', {}),
+                'machine': pe.get('machine', result['pe_info'].get('machine')),
+                'timestamp': pe.get('timestamp', result['pe_info'].get('timestamp')),
+                'entry_point': pe.get('entry_point'),
+                'image_base': pe.get('image_base'),
+                'size_of_code': pe.get('size_of_code'),
+                'size_of_image': pe.get('size_of_image'),
+                'characteristics': pe.get('characteristics'),
+                'subsystem': pe.get('subsystem'),
+            })
+            result['statistics']['entropy_map'] = pe.get('entropy', {})
+            result['statistics']['sections'] = pe.get('sections', [])
+
+        # Merge deobfuscated strings into string pool + categories
+        dobj = rea_result.get('deobfuscated_strings', []) or []
+        deob_values = [d.get('string', '') for d in dobj if d.get('string')]
+        if deob_values:
+            for v in deob_values:
+                if v and v not in strings:
+                    strings.append(v)
+            categories.setdefault('deobfuscated', [])
+            categories['deobfuscated'].extend(deob_values)
+            result['strings'] = strings
+            result['string_categories'] = categories
+
+        # Enhance disassembly with REA bytecode + api calls
+        dis = result['disassembly']
+        if rea_result.get('bytecode'):
+            dis['bytecode'] = rea_result['bytecode']
+        if rea_result.get('cfg'):
+            dis['cfg'] = rea_result['cfg']
+        if rea_result.get('call_graph'):
+            dis['call_graph'] = rea_result['call_graph']
+        if rea_result.get('api_calls'):
+            dis['api_calls'] = rea_result['api_calls']
+        if rea_result.get('functions'):
+            # Prefer REA function boundaries if capstone found none
+            if not dis.get('functions'):
+                dis['functions'] = rea_result['functions']
+            dis['rea_functions'] = rea_result['functions']
+        dis['data_flow'] = rea_result.get('data_flow', {})
+        dis['disasm_confidence'] = rea_result.get('confidence', 0.0)
+
+        # --- Decrypted bytecode dump (ForexMQ5-style dynamic analysis) ---
+        # If the user supplied a decrypted bytecode dump captured from a running
+        # MT4 process via x32dbg/IDA, disassemble it and run CFG/call-graph/
+        # data-flow analysis — the only technique that works on build 600+.
+        if decrypted_bytecode and self.rea is not None:
+            try:
+                db = {}
+                bc_ins = self.rea.vd.disassemble(decrypted_bytecode, 0)
+                db['bytecode_instructions'] = bc_ins
+                db['instruction_count'] = len(bc_ins)
+                # Collect syscalls from disassembled bytecode
+                syscalls = []
+                for ins in bc_ins:
+                    if ins.get('mnemonic') == 'SYS':
+                        for op in ins.get('operands', []):
+                            if op.get('type') == 'imm32':
+                                syscalls.append(op['value'])
+                db['syscalls'] = syscalls
+                db['api_calls'] = self.rea.ar.resolve_syscalls(syscalls)
+                # CFG + call graph + data flow on decrypted bytecode
+                db['cfg'] = self.rea.cfg.build(bc_ins)
+                db['call_graph'] = self.rea.cg.build([], bc_ins)
+                db['data_flow'] = self.rea.df.analyze(bc_ins, [])
+                result['decrypted_dump'] = db
+                # Merge into disassembly view
+                dis['decrypted_bytecode'] = bc_ins
+                dis['decrypted_cfg'] = db['cfg']
+                dis['decrypted_call_graph'] = db['call_graph']
+                dis['decrypted_data_flow'] = db['data_flow']
+                dis['decrypted_api_calls'] = db['api_calls']
+                dis['decrypted_instruction_count'] = len(bc_ins)
+                logger.info("Decrypted dump disassembled: %d instructions, %d syscalls",
+                            len(bc_ins), len(syscalls))
+            except Exception as e:
+                logger.error("Decrypted dump processing error: %s", e)
+                result['decrypted_dump'] = {'error': str(e)}
+
         result['recovery_profile'] = self._build_recovery_profile(result)
-        logger.info("Analysis complete – %d patterns, %d strings",
-                     len(result['patterns']), len(strings))
+        logger.info("Analysis complete – %d patterns, %d strings, rea_confidence=%.2f",
+                     len(result['patterns']), len(strings),
+                     rea_result.get('confidence', 0.0))
         return result
 
     # -- metadata -------------------------------------------------------------
@@ -760,6 +877,110 @@ class EX4AnalysisEngine:
                               'count': cnt})
         return found
 
+    # -- indicator properties ---------------------------------------------------
+
+    def _analyze_indicator_properties(self, data: bytes,
+                                      strings: List[str]) -> Dict:
+        """Extract indicator-specific properties from binary + strings.
+
+        Window type, buffer count, colors, short name, levels — everything
+        that can drive an indicator-specific code template. Gracefully
+        returns defaults when nothing is detectable (modern/encrypted EX4).
+        """
+        props: Dict = {
+            'window': 'separate',
+            'has_separate_window': False,
+            'has_chart_window': False,
+            'buffers': 1,
+            'buffer_styles': {},
+            'buffer_labels': {},
+            'colors': {},
+            'widths': {},
+            'levels': [],
+            'short_name': '',
+            'draw_types': [],
+            'confidence': 0.0,
+        }
+        try:
+            lower_data = data.lower()
+            string_blob = '\n'.join(strings)
+            lower_blob = string_blob.lower()
+
+            # ---- window type ----
+            if (b'indicator_chart_window' in data
+                    or 'indicator_chart_window' in lower_blob):
+                props['window'] = 'chart'
+                props['has_chart_window'] = True
+                props['confidence'] += 0.25
+            if (b'indicator_separate_window' in data
+                    or 'indicator_separate_window' in lower_blob):
+                props['window'] = 'separate'
+                props['has_separate_window'] = True
+                props['confidence'] += 0.25
+
+            # ---- buffer count ----
+            m = re.search(rb'indicator_buffers\s+(\d+)', data, re.IGNORECASE)
+            if m:
+                props['buffers'] = max(props['buffers'], int(m.group(1)))
+                props['confidence'] += 0.15
+            else:
+                m = re.search(r'indicator_buffers\s+(\d+)',
+                              string_blob, re.IGNORECASE)
+                if m:
+                    props['buffers'] = max(props['buffers'], int(m.group(1)))
+                    props['confidence'] += 0.1
+
+            # hint from SetIndexBuffer/SetIndexStyle call counts
+            sib = lower_data.count(b'setindexbuffer')
+            sis = lower_data.count(b'setindexstyle')
+            if sib and sib > props['buffers']:
+                props['buffers'] = sib
+            if sis and sis > props['buffers']:
+                props['buffers'] = sis
+            props['buffers'] = max(1, min(props['buffers'], 8))
+
+            # ---- colors / widths / labels per buffer ----
+            for i in range(1, 9):
+                for key, target in (
+                        (f'indicator_color{i}'.encode(), 'colors'),
+                        (f'indicator_width{i}'.encode(), 'widths'),
+                        (f'indicator_label{i}'.encode(), 'buffer_labels'),
+                ):
+                    m = re.search(rb'%s\s*([^\x00\s]{0,20})' % key, data,
+                                  re.IGNORECASE)
+                    if m:
+                        val = m.group(1).decode('ascii', errors='ignore').strip()
+                        if val:
+                            props[target][i] = val
+                            props['confidence'] += 0.03
+
+            # ---- short name ----
+            m = re.search(rb'indicator_short_name\s*([^\x00\s]{0,40})', data,
+                          re.IGNORECASE)
+            if m:
+                props['short_name'] = m.group(1).decode('ascii',
+                                                      errors='ignore').strip()
+                props['confidence'] += 0.1
+            else:
+                m = re.search(r'indicator_short_name\s*([^\x00\s]{0,40})',
+                              string_blob, re.IGNORECASE)
+                if m:
+                    props['short_name'] = m.group(1).strip().strip('"')
+                    props['confidence'] += 0.08
+
+            # ---- levels ----
+            for m in re.finditer(rb'indicator_level\d+\s*([\d\.]+)', data,
+                                 re.IGNORECASE):
+                try:
+                    props['levels'].append(float(m.group(1)))
+                except ValueError:
+                    pass
+
+            props['confidence'] = round(min(props['confidence'], 1.0), 2)
+        except Exception as e:
+            logger.debug("indicator properties error: %s", e)
+        return props
+
     # -- parameters -----------------------------------------------------------
 
     def _extract_input_parameters(self, cats: Dict) -> List[Dict]:
@@ -1035,6 +1256,9 @@ class EX4AnalysisEngine:
         if meta.get('format', '').startswith('Legacy') and analysis.get('input_parameters'):
             recovery = 'Structured partial recovery'
             confidence = 'Medium'
+        elif analysis.get('decrypted_dump'):
+            recovery = 'Dynamic bytecode recovery (x32dbg/IDA dump)'
+            confidence = 'Medium-High'
         elif structured_count or analysis.get('audit_report', {}).get('findings'):
             recovery = 'Metadata-oriented recovery'
             confidence = 'Low'
@@ -1050,6 +1274,11 @@ class EX4AnalysisEngine:
             notes.append(
                 'Modern encrypted EX4 payloads preserve little high-confidence '
                 'logic without opcode-level decoding.')
+        if analysis.get('decrypted_dump'):
+            notes.append(
+                'Decrypted bytecode dump loaded – full MQL4 VM disassembly, '
+                'CFG, call graph, and data-flow analysis available '
+                '(ForexMQ5-style dynamic analysis).')
 
         return {
             'recovery_level': recovery,
@@ -1130,9 +1359,30 @@ class CodeGenerator:
                 L.append(f"// Indicators: {', '.join(strat['indicators_used'])}")
             L.append('')
 
+        iprops = a.get('indicator_properties', {}) or {}
+        nbuf = int(iprops.get('buffers', 1))
+        window = iprops.get('window', 'separate')
+        colors = iprops.get('colors', {})
+        widths = iprops.get('widths', {})
+        labels = iprops.get('buffer_labels', {})
+        short_name = iprops.get('short_name', '')
+
+        if meta.get('format', '').startswith('Modern'):
+            L.append('// NOTE: Modern (build 600+) EX4 payload is encrypted;')
+            L.append('//       structure below is inferred, not decrypted source.')
+            L.append('')
+
         if meta['type'] == 'Indicator':
-            L.append('#property indicator_separate_window')
-            L.append('#property indicator_buffers 1')
+            L.append(f'#property indicator_{window}_window')
+            L.append(f'#property indicator_buffers {nbuf}')
+            if short_name:
+                L.append(f'#property indicator_short_name "{short_name}"')
+            for i in range(nbuf):
+                idx = i + 1
+                if idx in colors:
+                    L.append(f'#property indicator_color{idx} {colors[idx]}')
+                if idx in widths:
+                    L.append(f'#property indicator_width{idx} {widths[idx]}')
             L.append('')
 
         params = a.get('input_parameters', [])
@@ -1143,14 +1393,19 @@ class CodeGenerator:
             L.append('')
 
         if meta['type'] == 'Indicator':
-            L += ['// Indicator Buffers', 'double Buffer1[];', '']
+            L += ['// Indicator Buffers']
+            for i in range(nbuf):
+                L.append(f'double Buffer{i}[];')
+            L.append('')
 
         L += self._header_box('Initialization')
         L += ['int init()', '{']
         if meta['type'] == 'Indicator':
-            L += ['    SetIndexStyle(0, DRAW_LINE);',
-                  '    SetIndexBuffer(0, Buffer1);',
-                  '    SetIndexLabel(0, "Main Buffer");']
+            for i in range(nbuf):
+                L.append(f'    SetIndexStyle({i}, DRAW_LINE);')
+                L.append(f'    SetIndexBuffer({i}, Buffer{i});')
+                lbl = labels.get(i + 1, f'Buffer {i}')
+                L.append(f'    SetIndexLabel({i}, "{lbl}");')
         L += ['    return(0);', '}', '']
 
         L += self._header_box('Deinitialization')
@@ -1665,6 +1920,7 @@ ICON_EXPORT = "💾"
 ICON_JSON = "📋"
 ICON_FILE = "📄"
 ICON_THEME = "🌙"
+ICON_DUMP = "🧠"
 
 
 def _detect_os_theme() -> str:
@@ -1718,6 +1974,7 @@ class EX4StudioApp(ctk.CTk):
         self.current_analysis: Optional[Dict] = None
         self.current_code: Optional[str] = None
         self.raw_data: Optional[bytes] = None
+        self.decrypted_bytecode: Optional[bytes] = None
 
         self._build_ui()
 
@@ -1822,6 +2079,15 @@ class EX4StudioApp(ctk.CTk):
                       text_color=self.T['text_primary'],
                       hover_color=self.T['sidebar_active']).pack(
             fill="x", padx=16, pady=3)
+        SidebarButton(self.sidebar, "Load Decrypted Dump", icon=ICON_DUMP,
+                      command=self._load_decrypted_dump,
+                      text_color=self.T['text_primary'],
+                      hover_color=self.T['sidebar_active']).pack(
+            fill="x", padx=16, pady=3)
+        ctk.CTkLabel(self.sidebar, text="Dump: x32dbg/IDA memory capture\nfrom running MT4 (build 600+)",
+                     font=ctk.CTkFont(size=9),
+                     text_color=self.T['text_secondary']).pack(
+            padx=16, pady=(2, 10))
 
         ctk.CTkFrame(self.sidebar, height=1,
                      fg_color=self.T['bg_card']).pack(
@@ -2203,26 +2469,67 @@ class EX4StudioApp(ctk.CTk):
             self._set_status(f"Error: {e}")
             logger.error("File load error: %s", e)
 
+    def _load_decrypted_dump(self):
+        """Load a decrypted bytecode dump captured from a running MT4 process
+        via x32dbg/IDA memory capture (ForexMQ5-style dynamic analysis)."""
+        path = filedialog.askopenfilename(
+            title="Load Decrypted Bytecode Dump",
+            filetypes=[("Binary dump", "*.bin *.dmp *.dat"), ("All files", "*.*")])
+        if not path:
+            return
+        self._set_status(f"Loading decrypted dump {os.path.basename(path)}...")
+        try:
+            with open(path, 'rb') as f:
+                self.decrypted_bytecode = f.read()
+            size_kb = round(len(self.decrypted_bytecode) / 1024, 1)
+            self._set_status(
+                f"Decrypted dump loaded: {os.path.basename(path)} ({size_kb} KB) \u2013 click Analyze")
+            logger.info("Decrypted dump loaded: %s (%d bytes)", path,
+                        len(self.decrypted_bytecode))
+        except Exception as e:
+            self._set_status(f"Error: {e}")
+            logger.error("Decrypted dump load error: %s", e)
+
     def _run_analysis(self):
         if not hasattr(self, '_filepath') or self.raw_data is None:
             self._set_status("No file loaded – use Open File first")
             return
+        if getattr(self, '_analyzing', False):
+            self._set_status("Analysis already in progress…")
+            return
+        self._analyzing = True
         self._set_status("Analyzing…")
         self.update()
-        try:
-            analysis = self.engine.analyze(self._filepath)
-            self.current_analysis = analysis
-            self._populate_overview(analysis)
-            self._populate_code(analysis)
-            self._populate_disasm(analysis)
-            self._populate_strings(analysis)
-            self._populate_hex()
-            self._set_status(
-                f"Analysis complete – {len(analysis.get('patterns', []))} "
-                f"patterns, {len(analysis.get('strings', []))} strings")
-        except Exception as e:
-            self._set_status(f"Analysis error: {e}")
-            logger.error("Analysis error: %s", e, exc_info=True)
+
+        def _worker():
+            try:
+                analysis = self.engine.analyze(
+                    self._filepath,
+                    decrypted_bytecode=self.decrypted_bytecode)
+                # Marshal GUI updates back to the main (tkinter) thread
+                self.after(0, lambda: self._analysis_done(analysis))
+            except Exception as e:
+                self.after(0, lambda: self._analysis_error(str(e)))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _analysis_done(self, analysis: Dict):
+        self._analyzing = False
+        self.current_analysis = analysis
+        self._populate_overview(analysis)
+        self._populate_code(analysis)
+        self._populate_disasm(analysis)
+        self._populate_strings(analysis)
+        self._populate_hex()
+        self._set_status(
+            f"Analysis complete – {len(analysis.get('patterns', []))} "
+            f"patterns, {len(analysis.get('strings', []))} strings, "
+            f"REA confidence {analysis.get('rea', {}).get('confidence', 0)}")
+
+    def _analysis_error(self, err: str):
+        self._analyzing = False
+        self._set_status(f"Analysis error: {err}")
+        logger.error("Analysis error: %s", err, exc_info=True)
 
     def _on_language_change(self, _=None):
         if self.current_analysis:
@@ -2356,6 +2663,22 @@ class EX4StudioApp(ctk.CTk):
                 lines.append(f"  • {ind['name']} – {ind['description']} (x{ind['count']})")
             lines.append("")
 
+        iprops = a.get('indicator_properties', {}) or {}
+        if iprops and meta.get('type') == 'Indicator':
+            lines.append("  INDICATOR PROPERTIES")
+            lines.append(f"  ├─ Window:      {iprops.get('window', 'separate')}")
+            lines.append(f"  ├─ Buffers:     {iprops.get('buffers', 1)}")
+            if iprops.get('colors'):
+                lines.append(f"  ├─ Colors:      {dict(iprops['colors'])}")
+            if iprops.get('widths'):
+                lines.append(f"  ├─ Widths:      {dict(iprops['widths'])}")
+            if iprops.get('short_name'):
+                lines.append(f"  ├─ Short name:  {iprops['short_name']}")
+            if iprops.get('levels'):
+                lines.append(f"  ├─ Levels:      {iprops['levels']}")
+            lines.append(f"  └─ Confidence:  {iprops.get('confidence', 0)}")
+            lines.append("")
+
         params = a.get('input_parameters', [])
         if params:
             lines.append("  INPUT PARAMETERS")
@@ -2368,12 +2691,64 @@ class EX4StudioApp(ctk.CTk):
             lines.append(f"  DISASSEMBLY: {len(dis['functions'])} functions, "
                          f"{dis['total_instructions']} instructions")
             lines.append("")
+        if dis.get('decrypted_bytecode'):
+            lines.append("  DECRYPTED DUMP (dynamic analysis)")
+            lines.append(
+                f"  ├─ Instructions: {dis.get('decrypted_instruction_count', 0)}")
+            lines.append(
+                f"  ├─ Syscalls:     {len(dis.get('decrypted_api_calls', []))}")
+            for ac in dis.get('decrypted_api_calls', [])[:8]:
+                fn = ac.get('function') or ac.get('dll', '?')
+                conf = ac.get('confidence', 0)
+                lines.append(f"  │   • {fn} (conf {conf})")
+            lines.append("  └─ Full details in Disassembly tab")
+            lines.append("")
 
         lines.append(f"  Patterns: {len(a.get('patterns', []))}  |  "
                      f"Strings: {stats.get('total_strings', 0)}  |  "
                      f"Handlers: {len(handlers)}  |  "
                      f"Indicators: {len(inds)}")
         lines.append(f"{'═' * 60}")
+
+        # --- REA engine section ---
+        rea = a.get('rea', {})
+        if rea:
+            lines.append("")
+            lines.append("  REA ENGINE (reverse-engineering analysis)")
+            lines.append(f"  ├─ Overall confidence: {rea.get('confidence', 0)}")
+            bc = rea.get('bytecode', [])
+            if bc:
+                lines.append(f"  ├─ MQL4 bytecode instructions: {len(bc)}")
+                syscalls = [i for i in bc if i.get('mnemonic') == 'SYS']
+                if syscalls:
+                    lines.append(f"  ├─ System calls (SYS): {len(syscalls)}")
+            api = rea.get('api_calls', [])
+            if api:
+                lines.append(f"  ├─ Resolved API calls: {len(api)}")
+                for ac in api[:8]:
+                    fn = ac.get('function') or ac.get('dll', '?')
+                    conf = ac.get('confidence', 0)
+                    lines.append(f"  │   • {fn} (conf {conf})")
+            funcs = rea.get('functions', [])
+            if funcs:
+                lines.append(f"  ├─ REA functions detected: {len(funcs)}")
+            cfg = rea.get('cfg', {})
+            if cfg and cfg.get('_entry') is not None:
+                lines.append(f"  ├─ CFG entry: 0x{cfg['_entry']:08x}  "
+                             f"exits: {len(cfg.get('_exits', []))}  "
+                             f"loops: {len(cfg.get('_loops', []))}")
+            cg = rea.get('call_graph', {})
+            if cg and len(cg) > 1:
+                lines.append(f"  ├─ Call graph nodes: {len(cg) - 1}")
+            df = rea.get('data_flow', {})
+            if df:
+                lines.append(f"  ├─ Tainted sources: {df.get('num_tainted_sources', 0)}")
+                lines.append(f"  └─ Tainted sinks: {df.get('num_tainted_sinks', 0)}")
+            emap = rea.get('entropy_map', {})
+            if emap:
+                high = [k for k, v in emap.items() if v >= 7.2]
+                if high:
+                    lines.append(f"  └─ High-entropy sections: {', '.join(high)}")
 
         self.overview_text.insert("end", "\n".join(lines))
 
@@ -2437,6 +2812,98 @@ class EX4StudioApp(ctk.CTk):
         lines.append(f"  Total strings: {stats.get('total_strings', 0)}")
         lines.append(f"  Patterns:      {len(a.get('patterns', []))}")
 
+        # --- REA disassembly details ---
+        rea = a.get('rea', {}) or {}
+        if rea:
+            lines.append("")
+            lines.append(f"{'─' * 50}")
+            lines.append("  REA DISASSEMBLY & API ANALYSIS")
+            lines.append(f"{'─' * 50}")
+            lines.append(f"  Overall REA confidence: {rea.get('confidence', 0)}")
+
+            bc = rea.get('bytecode', [])
+            if bc:
+                lines.append(f"  MQL4 VM bytecode instructions: {len(bc)}")
+                for ins in bc[:30]:
+                    addr = ins.get('address', 0)
+                    mnem = ins.get('mnemonic', '?')
+                    ops = ins.get('operands', [])
+                    opstr = ', '.join(
+                        str(o.get('value', o)) for o in ops) if ops else ''
+                    lines.append(f"    0x{addr:08x}:  {mnem} {opstr}")
+                if len(bc) > 30:
+                    lines.append(f"    ... ({len(bc) - 30} more instructions)")
+
+            api = rea.get('api_calls', [])
+            if api:
+                lines.append("")
+                lines.append("  Resolved API calls:")
+                for ac in api[:40]:
+                    fn = ac.get('function') or ac.get('dll', '?')
+                    conf = ac.get('confidence', 0)
+                    addr = ac.get('address')
+                    addrstr = f"0x{addr:08x}" if addr is not None else 'n/a'
+                    lines.append(f"    {addrstr}  {fn}  (conf {conf})")
+
+            df = rea.get('data_flow', {})
+            if df and (df.get('tainted_sources') or df.get('tainted_sinks')):
+                lines.append("")
+                lines.append("  Data-flow taint:")
+                for s in df.get('tainted_sources', [])[:10]:
+                    lines.append(f"    [SOURCE] 0x{s.get('addr', 0):08x}  "
+                                 f"{s.get('function', '?')}  sysnum={s.get('sysnum')}")
+                for s in df.get('tainted_sinks', [])[:10]:
+                    lines.append(f"    [SINK]   0x{s.get('addr', 0):08x}  "
+                                 f"{s.get('function', '?')}  sysnum={s.get('sysnum')}")
+
+            emap = rea.get('entropy_map', {})
+            if emap:
+                lines.append("")
+                lines.append("  Per-section entropy:")
+                for name, ent in emap.items():
+                    flag = '  <-- HIGH' if ent >= 7.2 else ''
+                    lines.append(f"    {name}: {ent}{flag}")
+
+        # --- Decrypted dump (dynamic analysis) details ---
+        dd = a.get('decrypted_dump', {}) or {}
+        if dd and not dd.get('error'):
+            lines.append("")
+            lines.append(f"{'─' * 50}")
+            lines.append("  DECRYPTED BYTECODE DUMP (dynamic analysis)")
+            lines.append(f"{'─' * 50}")
+            lines.append(f"  Instructions: {dd.get('instruction_count', 0)}")
+            lines.append(f"  Syscalls: {len(dd.get('syscalls', []))}")
+            syscalls = dd.get('syscalls', [])
+            if syscalls:
+                lines.append("  Syscall numbers: " +
+                             ', '.join(f"0x{s:04x}" for s in syscalls[:20]))
+                if len(syscalls) > 20:
+                    lines.append(f"    ... ({len(syscalls) - 20} more)")
+            bc = dd.get('bytecode_instructions', [])
+            if bc:
+                lines.append("")
+                lines.append("  First 30 MQL4 VM instructions:")
+                for ins in bc[:30]:
+                    addr = ins.get('address', 0)
+                    mnem = ins.get('mnemonic', '?')
+                    ops = ins.get('operands', [])
+                    opstr = ', '.join(
+                        str(o.get('value', o)) for o in ops) if ops else ''
+                    lines.append(f"    0x{addr:08x}:  {mnem} {opstr}")
+                if len(bc) > 30:
+                    lines.append(f"    ... ({len(bc) - 30} more instructions)")
+            dapi = dd.get('api_calls', [])
+            if dapi:
+                lines.append("")
+                lines.append("  Resolved API calls from dump:")
+                for ac in dapi[:40]:
+                    fn = ac.get('function') or ac.get('dll', '?')
+                    conf = ac.get('confidence', 0)
+                    lines.append(f"    {fn}  (conf {conf})")
+        elif dd and dd.get('error'):
+            lines.append("")
+            lines.append(f"  [!] Decrypted dump error: {dd['error']}")
+
         self.disasm_text.insert("end", "\n".join(lines))
 
     def _populate_strings(self, a: Dict):
@@ -2456,6 +2923,23 @@ class EX4StudioApp(ctk.CTk):
             self.strings_text.insert(
                 "end", "  No categorized strings found.\n"
                 "  Load and analyze an EX4 file to see extracted strings.\n")
+
+        # --- REA deobfuscated strings ---
+        rea = a.get('rea', {}) or {}
+        dobj = rea.get('deobfuscated_strings', []) or []
+        if dobj:
+            self.strings_text.insert(
+                "end", f"\n{'─' * 40}\n  DEOBFUSCATED STRINGS ({len(dobj)})\n{'─' * 40}\n")
+            for d in dobj[:200]:
+                val = d.get('string', '')
+                method = d.get('method', '?')
+                key = d.get('key', '')
+                score = d.get('score', 0)
+                keystr = f" key={key}" if key not in (None, '', 'none') else ''
+                self.strings_text.insert(
+                    "end", f"  [{method} score={score}{keystr}]  {val}\n")
+
+        self.strings_text.insert("end", "\n")
 
     def _populate_hex(self, max_bytes: int = 4096):
         self.hex_text.delete("0.0", "end")

@@ -12,14 +12,16 @@ from collections import Counter
 import math
 import argparse
 
+from ex4_rea_engine import REAEngine
+
 # Configure logging
 logging.basicConfig(level=logging.DEBUG,
                    format='%(asctime)s - %(levelname)s - %(message)s')
 
 class MT4Analyzer:
     def __init__(self):
-        self.known_patterns = {
-            # Common patterns
+        self.rea = REAEngine()
+        self.known_patterns = {            # Common patterns
             b'indicator': 'Custom Indicator',
             b'expert': 'Expert Advisor',
             b'copyright': 'Copyright Information',
@@ -82,7 +84,7 @@ class MT4Analyzer:
             b'RiskPercent': 'Risk Percentage',
         }
 
-    def analyze_file(self, filepath):
+    def analyze_file(self, filepath, decrypted_bytecode=None):
         """Analyze an EX4 file with enhanced detailed error reporting"""
         try:
             logging.info(f"Starting analysis of {filepath}")
@@ -115,10 +117,27 @@ class MT4Analyzer:
                 'risk_management': self.analyze_risk_management(data),
                 'statistics': self.generate_statistics(data, strings)
             }
-            
+
+            # REA engine analysis
+            try:
+                analysis['rea'] = self.rea.analyze(filepath)
+            except Exception as e:
+                logging.error(f"REA engine error: {str(e)}", exc_info=True)
+                analysis['rea'] = {}
+
+            # Decrypted dump processing (ForexMQ5-style dynamic analysis)
+            if decrypted_bytecode:
+                try:
+                    analysis['decrypted_dump'] = self.process_decrypted_dump(decrypted_bytecode)
+                except Exception as e:
+                    logging.error(f"Decrypted dump error: {str(e)}", exc_info=True)
+                    analysis['decrypted_dump'] = {'error': str(e)}
+            else:
+                analysis['decrypted_dump'] = {}
+
             logging.info("Analysis completed successfully")
             return analysis
-            
+
         except Exception as e:
             logging.error(f"Error during analysis: {str(e)}", exc_info=True)
             return {
@@ -131,8 +150,54 @@ class MT4Analyzer:
                 'input_parameters': [],
                 'trading_strategy': {},
                 'risk_management': {},
-                'statistics': {}
+                'statistics': {},
+                'rea': {},
+                'decrypted_dump': {}
             }
+
+    def process_decrypted_dump(self, decrypted_bytecode):
+        """Process a decrypted bytecode dump captured from a running MT4 process
+        via x32dbg/IDA memory capture (ForexMQ5-style dynamic analysis)."""
+        dump_result = {
+            'instruction_count': 0,
+            'syscalls': [],
+            'api_calls': [],
+            'bytecode_instructions': [],
+            'cfg': {},
+            'call_graph': {},
+            'data_flow': {},
+            'error': None,
+        }
+        try:
+            if not decrypted_bytecode:
+                dump_result['error'] = 'No decrypted bytecode provided'
+                return dump_result
+
+            bc_ins = self.rea.vd.disassemble(decrypted_bytecode, 0)
+            dump_result['bytecode_instructions'] = bc_ins
+            dump_result['instruction_count'] = len(bc_ins)
+
+            # Collect syscalls from disassembled bytecode
+            syscalls = []
+            for ins in bc_ins:
+                if ins.get('mnemonic') == 'SYS':
+                    for op in ins.get('operands', []):
+                        if op.get('type') == 'imm32':
+                            syscalls.append(op['value'])
+            dump_result['syscalls'] = syscalls
+            dump_result['api_calls'] = self.rea.ar.resolve_syscalls(syscalls)
+
+            # CFG + call graph + data flow on decrypted bytecode
+            dump_result['cfg'] = self.rea.cfg.build(bc_ins)
+            dump_result['call_graph'] = self.rea.cg.build([], bc_ins)
+            dump_result['data_flow'] = self.rea.df.analyze(bc_ins, [])
+
+            logging.info(f"Decrypted dump processed: {len(bc_ins)} instructions, {len(syscalls)} syscalls")
+        except Exception as e:
+            logging.error(f"Decrypted dump processing error: {e}")
+            dump_result['error'] = str(e)
+
+        return dump_result
 
     def extract_metadata(self, data):
         """Extract enhanced metadata with better timestamp and details"""
@@ -1719,6 +1784,10 @@ Examples:
                         help='Output file path (default: print to console)')
     parser.add_argument('--no-gui', action='store_true',
                         help='Run in CLI mode only (no GUI)')
+    parser.add_argument('--dump', default=None,
+                        help='Path to decrypted bytecode dump (x32dbg/IDA memory capture)')
+    parser.add_argument('--json', action='store_true',
+                        help='Output full analysis as JSON instead of pseudocode')
     
     args = parser.parse_args()
     
@@ -1744,6 +1813,16 @@ def run_cli_mode(args):
     if not filepath.lower().endswith('.ex4'):
         print(f"Warning: File does not have .ex4 extension: {filepath}")
     
+    # Load decrypted dump if provided (ForexMQ5-style dynamic analysis)
+    decrypted_bytecode = None
+    if args.dump:
+        if not os.path.exists(args.dump):
+            print(f"Error: Dump file not found: {args.dump}")
+            sys.exit(1)
+        with open(args.dump, 'rb') as f:
+            decrypted_bytecode = f.read()
+        print(f"Decrypted dump loaded: {args.dump} ({len(decrypted_bytecode)} bytes)")
+    
     # Create analyzer and process file
     analyzer = MT4Analyzer()
     
@@ -1752,12 +1831,78 @@ def run_cli_mode(args):
     print("-" * 70)
     
     try:
-        analysis = analyzer.analyze_file(filepath)
+        analysis = analyzer.analyze_file(filepath, decrypted_bytecode=decrypted_bytecode)
         analysis['filepath'] = filepath
         
         if 'error' in analysis and analysis['error']:
             print(f"Error during analysis: {analysis['error']}")
             sys.exit(1)
+        
+        # ---- JSON output mode ----
+        if args.json:
+            out = json.dumps(analysis, indent=2, default=str)
+            if args.output:
+                with open(args.output, 'w') as f:
+                    f.write(out)
+                print(f"JSON analysis saved to: {args.output}")
+            else:
+                print(out)
+            return
+        
+        # ---- Console summary: metadata, modern EX4, REA, decrypted dump ----
+        meta = analysis.get('metadata', {})
+        print(f"Type:        {meta.get('type', 'Unknown')}")
+        print(f"Version:     {meta.get('version', 'Unknown')}")
+        if meta.get('copyright', 'Unknown') != 'Unknown':
+            print(f"Copyright:   {meta['copyright']}")
+        print(f"Size:        {meta.get('file_size', 0)} bytes")
+        print()
+        
+        rea = analysis.get('rea', {}) or {}
+        modern = rea.get('modern_ex4', {}) or {}
+        if modern.get('is_modern_ex4'):
+            print("[MODERN EX4 (build 600+, encrypted)]")
+            print(f"  Build estimate: {modern.get('build_estimate', 'Unknown')}")
+            print(f"  Encrypted:      {modern.get('encrypted', False)}")
+            print(f"  Key tables:     {modern.get('key_table_count', 0)}")
+            print(f"  Decryptable:    {modern.get('decryptable', False)}")
+            if modern.get('decryption_error'):
+                print(f"  Note:           {modern['decryption_error']}")
+            print()
+        
+        print(f"REA confidence: {rea.get('confidence', 0)}")
+        bc = rea.get('bytecode', [])
+        if bc:
+            syscalls = [i for i in bc if i.get('mnemonic') == 'SYS']
+            print(f"MQL4 VM bytecode instructions: {len(bc)} (syscalls: {len(syscalls)})")
+        api = rea.get('api_calls', [])
+        if api:
+            print(f"Resolved API calls: {len(api)}")
+            for ac in api[:10]:
+                fn = ac.get('function') or ac.get('dll', '?')
+                conf = ac.get('confidence', 0)
+                print(f"  • {fn} (conf {conf})")
+        print()
+        
+        # Decrypted dump summary
+        dd = analysis.get('decrypted_dump', {}) or {}
+        if dd and not dd.get('error'):
+            print("[DECRYPTED BYTECODE DUMP (dynamic analysis)]")
+            print(f"  Instructions: {dd.get('instruction_count', 0)}")
+            print(f"  Syscalls:     {len(dd.get('syscalls', []))}")
+            if dd.get('syscalls'):
+                print(f"  Syscall nums: {', '.join(f'0x{s:04x}' for s in dd['syscalls'][:20])}")
+            dapi = dd.get('api_calls', [])
+            if dapi:
+                print(f"  Resolved API calls: {len(dapi)}")
+                for ac in dapi[:10]:
+                    fn = ac.get('function') or ac.get('dll', '?')
+                    conf = ac.get('confidence', 0)
+                    print(f"    • {fn} (conf {conf})")
+            print()
+        elif dd and dd.get('error'):
+            print(f"[!] Decrypted dump error: {dd['error']}")
+            print()
         
         # Generate pseudocode
         pseudocode = analyzer.generate_pseudocode(analysis, args.language)
